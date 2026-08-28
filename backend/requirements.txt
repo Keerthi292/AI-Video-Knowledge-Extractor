@@ -4,3 +4,7 @@ python-multipart
 openai-whisper
 google-genai
 python-dotenv
+yt-dlp
+requests
+mcp[cli]
+httpx

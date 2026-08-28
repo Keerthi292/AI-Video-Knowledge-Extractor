@@ -2,4 +2,6 @@ venv/
 __pycache__/
 uploads/*
 !uploads/.gitkeep
+summaries/*
+!summaries/.gitkeep
 .env
