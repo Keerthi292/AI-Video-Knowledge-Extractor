@@ -1,0 +1,28 @@
+services:
+  - type: web
+    name: ai-video-backend
+    env: docker
+    dockerfilePath: ./backend/Dockerfile
+    dockerContext: ./backend
+    envVars:
+      - key: PYTHONUNBUFFERED
+        value: 1
+      - key: GEMINI_API_KEY
+        sync: false
+    autoDeploy: true
+
+  - type: web
+    name: ai-video-frontend
+    env: node
+    buildCommand: npm install && npm run build
+    startCommand: npm run preview
+    staticPublishPath: build
+    envVars:
+      - key: VITE_API_URL
+        value: https://ai-video-backend.onrender.com
+        sync: false
+    autoDeployOnPush: true
+    routes:
+      - type: http
+        source: /
+        destination: /
