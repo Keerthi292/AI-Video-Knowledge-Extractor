@@ -22,10 +22,23 @@ Either way, the resulting transcript is sent to Gemini, which returns an intro, 
 ## Flow
 
 ```mermaid
-flowchart LR
-    A[Upload / URL] --> B[Transcript<br/>captions or Whisper]
-    B --> C[Gemini: Roadmap<br/>intro + key points + topics]
-    C --> D[Explain / Quiz / Final Quiz]
+flowchart TD
+    A[User: upload file OR paste video URL] --> B{Input type?}
+
+    B -- URL --> C["MCP tool: fetch_video_details<br/>(yt-dlp captions, no download)"]
+    C --> D{Captions found?}
+    D -- yes --> E[Transcript]
+    D -- no --> F[yt-dlp: download audio only] --> G[Whisper: transcribe] --> E
+
+    B -- File --> H[FFmpeg: extract audio] --> I[Whisper: transcribe] --> E
+
+    E --> J["MCP tool: summarize_transcript<br/>(Gemini) → intro + key points + roadmap"]
+    J --> K[yt-dlp: related videos per topic]
+    K --> L[SvelteKit renders roadmap]
+
+    L -- "Explain" --> M["MCP tool: explain_topic (Gemini)"] --> L
+    L -- "Quiz me" --> N["MCP tool: quiz_topic (Gemini)"] --> L
+    L -- "Final Quiz" --> O["MCP tool: quiz_overall (Gemini)"] --> L
 ```
 
 1. The user uploads a video file or pastes a video URL in the SvelteKit UI and clicks **Analyze Video**.
