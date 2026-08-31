@@ -15,8 +15,6 @@ load_dotenv()
 from services.audio_extractor import AudioExtractionError, extract_audio
 from services.downloader import VideoDownloadError, download_audio
 from services.mcp_client import MCPToolError, VideoDetailsMCPClient
-from services.summarizer import SummarizationError, summarize_transcript
-from services.topic_assistant import TopicAssistantError, explain_topic, quiz_topic
 from services.transcriber import TranscriptionError, transcribe_audio
 from services.video_search import search_youtube_videos
 
@@ -115,29 +113,37 @@ class TopicRequest(BaseModel):
     example: str | None = None
 
 
+class OverallQuizRequest(BaseModel):
+    roadmap: list[dict]
+
+
 @app.get("/api/health")
 def health_check():
     return {"status": "ok"}
 
 
 @app.post("/api/topic/explain")
-def topic_explain(body: TopicRequest):
+async def topic_explain(body: TopicRequest):
     try:
-        points = explain_topic(body.heading, body.content, body.example)
-    except TopicAssistantError as exc:
+        return await app.state.mcp_client.explain_topic(body.heading, body.content, body.example)
+    except MCPToolError as exc:
         raise HTTPException(status_code=500, detail=str(exc))
-
-    return {"points": points}
 
 
 @app.post("/api/topic/quiz")
-def topic_quiz(body: TopicRequest):
+async def topic_quiz(body: TopicRequest):
     try:
-        questions = quiz_topic(body.heading, body.content, body.example)
-    except TopicAssistantError as exc:
+        return await app.state.mcp_client.quiz_topic(body.heading, body.content, body.example)
+    except MCPToolError as exc:
         raise HTTPException(status_code=500, detail=str(exc))
 
-    return {"questions": questions}
+
+@app.post("/api/quiz/overall")
+async def overall_quiz(body: OverallQuizRequest):
+    try:
+        return await app.state.mcp_client.quiz_overall(body.roadmap, count=12)
+    except MCPToolError as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
 
 
 @app.post("/api/analyze")
@@ -168,8 +174,8 @@ async def analyze_video(
                 raise HTTPException(status_code=502, detail=f"Video details MCP tool failed: {message}")
 
         try:
-            analysis = summarize_transcript(transcript)
-        except SummarizationError as exc:
+            analysis = await app.state.mcp_client.summarize_transcript(transcript)
+        except MCPToolError as exc:
             raise HTTPException(status_code=500, detail=str(exc))
 
         await enrich_video_resources(analysis["roadmap"])
@@ -211,8 +217,8 @@ async def analyze_video(
             raise HTTPException(status_code=500, detail=str(exc))
 
         try:
-            analysis = summarize_transcript(transcript)
-        except SummarizationError as exc:
+            analysis = await app.state.mcp_client.summarize_transcript(transcript)
+        except MCPToolError as exc:
             raise HTTPException(status_code=500, detail=str(exc))
 
         await enrich_video_resources(analysis["roadmap"])
@@ -229,3 +235,13 @@ async def analyze_video(
         temp_path.unlink(missing_ok=True)
         if audio_path is not None:
             audio_path.unlink(missing_ok=True)
+
+
+if __name__ == "__main__":
+    import uvicorn
+
+    # Running this file directly (`python main.py`) starts the whole backend:
+    # the FastAPI app's `lifespan` above spawns the video-details MCP tool
+    # server as a subprocess and connects to it, so no separate process needs
+    # to be started by hand.
+    uvicorn.run(app, host="0.0.0.0", port=8000)

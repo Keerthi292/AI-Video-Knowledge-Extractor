@@ -56,14 +56,33 @@ class VideoDetailsMCPClient:
                         )
                     await asyncio.sleep(CONNECT_RETRY_INTERVAL_SECONDS)
 
-    async def fetch_video_details(self, url: str) -> dict:
-        result = await self.session.call_tool("fetch_video_details", {"url": url})
+    async def _call(self, tool_name: str, arguments: dict) -> dict:
+        result = await self.session.call_tool(tool_name, arguments)
         if result.is_error:
             message = result.content[0].text if result.content else "Unknown MCP tool error"
             raise MCPToolError(message)
         if result.structured_content is not None:
             return result.structured_content
         return json.loads(result.content[0].text)
+
+    async def fetch_video_details(self, url: str) -> dict:
+        return await self._call("fetch_video_details", {"url": url})
+
+    async def summarize_transcript(self, transcript: str) -> dict:
+        return await self._call("summarize_transcript", {"transcript": transcript})
+
+    async def explain_topic(self, heading: str, content: str, example: str | None) -> dict:
+        return await self._call(
+            "explain_topic", {"heading": heading, "content": content, "example": example}
+        )
+
+    async def quiz_topic(self, heading: str, content: str, example: str | None) -> dict:
+        return await self._call(
+            "quiz_topic", {"heading": heading, "content": content, "example": example}
+        )
+
+    async def quiz_overall(self, roadmap: list[dict], count: int = 12) -> dict:
+        return await self._call("quiz_overall", {"roadmap": roadmap, "count": count})
 
     async def close(self):
         await self._stack.aclose()

@@ -57,6 +57,12 @@
 	let quizSelected = new SvelteMap<string, number>();
 	let copiedHeading: string | null = $state(null);
 
+	let overallQuiz: QuizQuestion[] | null = $state(null);
+	let overallQuizLoading = $state(false);
+	let overallQuizError: string | null = $state(null);
+	let overallQuizIndex = $state(0);
+	let overallQuizSelected = new SvelteMap<number, number>();
+
 	async function copyExample(heading: string, text: string) {
 		try {
 			await navigator.clipboard.writeText(text);
@@ -188,6 +194,52 @@
 		}
 	}
 
+	async function runOverallQuiz() {
+		if (!result || overallQuizLoading || overallQuiz) return;
+		overallQuizLoading = true;
+		overallQuizError = null;
+		try {
+			const response = await fetch(`${API_BASE}/api/quiz/overall`, {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({ roadmap: result.roadmap })
+			});
+			const data = await response.json();
+			if (!response.ok) throw new Error(data.detail ?? 'Failed to generate the quiz');
+			overallQuiz = data.questions as QuizQuestion[];
+			overallQuizIndex = 0;
+			overallQuizSelected.clear();
+		} catch (err) {
+			overallQuizError = err instanceof Error ? err.message : 'Something went wrong';
+		} finally {
+			overallQuizLoading = false;
+		}
+	}
+
+	function selectOverallOption(questionIndex: number, optionIndex: number) {
+		if (overallQuizSelected.has(questionIndex)) return;
+		overallQuizSelected.set(questionIndex, optionIndex);
+	}
+
+	function nextOverallQuestion() {
+		const total = overallQuiz?.length ?? 0;
+		if (overallQuizIndex + 1 < total) overallQuizIndex += 1;
+	}
+
+	function closeOverallQuiz() {
+		overallQuiz = null;
+		overallQuizError = null;
+		overallQuizIndex = 0;
+		overallQuizSelected.clear();
+	}
+
+	function retakeOverallQuiz() {
+		overallQuiz = null;
+		overallQuizIndex = 0;
+		overallQuizSelected.clear();
+		runOverallQuiz();
+	}
+
 	let isDraggingFile = $state(false);
 
 	function applyFile(file: File | null) {
@@ -262,6 +314,10 @@
 			quizLoading.clear();
 			quizIndex.clear();
 			quizSelected.clear();
+			overallQuiz = null;
+			overallQuizError = null;
+			overallQuizIndex = 0;
+			overallQuizSelected.clear();
 			uiState = 'SUCCESS';
 		} catch (err) {
 			errorMessage = err instanceof Error ? err.message : 'Something went wrong';
@@ -514,6 +570,70 @@
 						</div>
 					</div>
 				{/each}
+			</div>
+
+			<div class="overall-quiz-section">
+				<h2>Final Quiz</h2>
+				<p class="roadmap-hint">
+					Finished going through the roadmap? Test yourself across all of it.
+				</p>
+
+				{#if !overallQuiz}
+					<button
+						class="ai-action-btn overall-quiz-btn"
+						disabled={overallQuizLoading}
+						onclick={runOverallQuiz}
+					>
+						{overallQuizLoading ? 'Generating quiz…' : 'Take Full Quiz (10-15 questions)'}
+					</button>
+					{#if overallQuizError}
+						<p class="ai-error">{overallQuizError}</p>
+					{/if}
+				{:else}
+					{@const question = overallQuiz[overallQuizIndex]}
+					{@const selected = overallQuizSelected.get(overallQuizIndex)}
+					<div class="ai-panel overall-quiz-panel" transition:slide={{ duration: 200 }}>
+						<button class="ai-panel-close" aria-label="Close quiz" onclick={closeOverallQuiz}>
+							×
+						</button>
+						<div class="quiz-header">
+							<strong>Full Video Quiz</strong>
+							<span class="quiz-progress">
+								Question {overallQuizIndex + 1} of {overallQuiz.length}
+							</span>
+						</div>
+						<p>{question.question}</p>
+						<div class="quiz-options">
+							{#each question.options as option, idx}
+								<button
+									class="quiz-option"
+									class:correct={selected !== undefined && idx === question.answer_index}
+									class:incorrect={selected === idx && idx !== question.answer_index}
+									disabled={selected !== undefined}
+									onclick={() => selectOverallOption(overallQuizIndex, idx)}
+								>
+									{option}
+								</button>
+							{/each}
+						</div>
+						{#if selected !== undefined}
+							<p class="quiz-explanation">{question.explanation}</p>
+							{#if overallQuizIndex + 1 < overallQuiz.length}
+								<button class="quiz-next-btn" onclick={nextOverallQuestion}>
+									Next question →
+								</button>
+							{:else}
+								{@const correctCount = [...overallQuizSelected.entries()].filter(
+									([qIdx, sel]) => overallQuiz![qIdx].answer_index === sel
+								).length}
+								<p class="quiz-done">
+									Quiz complete — you scored {correctCount} / {overallQuiz.length}.
+								</p>
+								<button class="quiz-next-btn" onclick={retakeOverallQuiz}>Retake quiz</button>
+							{/if}
+						{/if}
+					</div>
+				{/if}
 			</div>
 		</section>
 	{/if}
@@ -1272,6 +1392,24 @@
 
 	.resource-link:hover {
 		text-decoration: underline;
+	}
+
+	.overall-quiz-section {
+		margin-top: 2.5rem;
+		padding-top: 1.75rem;
+		border-top: 2px dashed #eee;
+		text-align: center;
+	}
+
+	.overall-quiz-btn {
+		margin-top: 0.5rem;
+	}
+
+	.overall-quiz-panel {
+		max-width: 46rem;
+		width: 100%;
+		margin: 0.75rem auto 0;
+		text-align: left;
 	}
 
 	@media (max-width: 640px) {

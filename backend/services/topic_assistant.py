@@ -84,6 +84,23 @@ answerable from the explanation/example above — don't require outside
 knowledge.
 """
 
+OVERALL_QUIZ_PROMPT = """A learner has gone through an entire learning roadmap generated
+from a video, covering the modules listed below. Test their overall
+understanding across the WHOLE roadmap, not just one part of it.
+
+Roadmap:
+{roadmap_text}
+
+Write exactly {count} multiple-choice quiz questions that together cover
+every module above — spread the questions across all the modules
+(proportionally to how many there are) rather than clustering them on the
+first few. Don't ask more than one or two questions about any single module.
+For each question, provide exactly 4 "options", set "answer_index" to the
+0-based index of the correct option, and give a short "explanation" of why
+that answer is correct. Every question must be answerable from the roadmap
+content above — don't require outside knowledge.
+"""
+
 
 class TopicAssistantError(Exception):
     pass
@@ -124,9 +141,8 @@ def explain_topic(heading: str, content: str, example: str | None) -> list[dict]
     return points
 
 
-def quiz_topic(heading: str, content: str, example: str | None) -> list[dict]:
+def _generate_quiz(prompt: str) -> list[dict]:
     client = _get_client()
-    prompt = QUIZ_PROMPT.format(heading=heading, content=content, example=example or "(none given)")
 
     try:
         response = client.models.generate_content(
@@ -154,3 +170,32 @@ def quiz_topic(heading: str, content: str, example: str | None) -> list[dict]:
             raise TopicAssistantError("Gemini returned a malformed quiz question")
 
     return questions
+
+
+def quiz_topic(heading: str, content: str, example: str | None) -> list[dict]:
+    prompt = QUIZ_PROMPT.format(heading=heading, content=content, example=example or "(none given)")
+    return _generate_quiz(prompt)
+
+
+def _flatten_roadmap(roadmap: list[dict]) -> str:
+    """Render a roadmap tree as plain text (heading/content/example for every
+    topic and child) so it can be dropped straight into a prompt."""
+    lines = []
+    for topic in roadmap:
+        lines.append(f"- {topic.get('heading', '')}: {topic.get('content', '')}")
+        if topic.get("example"):
+            lines.append(f"  Example: {topic['example']}")
+        for child in topic.get("children") or []:
+            lines.append(f"  - {child.get('heading', '')}: {child.get('content', '')}")
+            if child.get("example"):
+                lines.append(f"    Example: {child['example']}")
+    return "\n".join(lines)
+
+
+def quiz_overall(roadmap: list[dict], count: int = 12) -> list[dict]:
+    if not roadmap:
+        raise TopicAssistantError("Roadmap is empty, nothing to quiz on")
+
+    roadmap_text = _flatten_roadmap(roadmap)
+    prompt = OVERALL_QUIZ_PROMPT.format(roadmap_text=roadmap_text, count=count)
+    return _generate_quiz(prompt)
