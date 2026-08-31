@@ -526,7 +526,7 @@
 	}
 
 	main {
-		max-width: 1000px;
+		max-width: 1400px;
 		margin: 0 auto;
 		padding: 3rem 1.25rem 4rem;
 		font-family:

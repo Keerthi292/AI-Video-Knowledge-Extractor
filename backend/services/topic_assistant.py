@@ -1,3 +1,5 @@
+# this module provides functions to generate explanations and quizzes for a given topic using the Gemini API.
+
 import json
 import os
 
