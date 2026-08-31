@@ -21,21 +21,6 @@ Uploaded file ──► FFmpeg ──► Whisper ──► Gemini
 - **Data**: SQLite (`backend/app.db`) — users, sessions, analyses (with per-topic done-state).
 - **Docker**: `docker-compose.yml` builds both services; backend DB path is a mounted volume.
 
-## MCP Tools
-
-| Tool | Backs |
-|---|---|
-| `fetch_video_details` | Read captions for a URL, no download |
-| `summarize_transcript` | Gemini → intro + key points + roadmap |
-| `explain_topic` | Gemini → deeper explanation for one topic |
-| `quiz_topic` | Gemini → 5-question quiz for one topic |
-| `quiz_overall` | Gemini → 10-15 question quiz for the whole roadmap |
-| `signup` / `login` / `logout` | Account + session management |
-| `list_history` / `get_history_item` | Browse/reopen a user's own saved analyses |
-| `update_done_topics` | Persist "mark as done" per topic |
-
-All account/history tools take a `token`; the server resolves it to a `user_id` internally, so one account can never read another's data.
-
 ## Flow
 
 ```mermaid
@@ -59,7 +44,27 @@ flowchart TD
     M -- Log out --> S[MCP: logout]
 ```
 
-### Sequence Diagram
+## MCP Tools
+
+Every Gemini/yt-dlp call, and every account/history read or write, goes through one local MCP tool server (`backend/mcp_server/video_details_server.py`), auto-spawned by `main.py` on startup. FastAPI never touches Gemini, yt-dlp, or the database directly — it's a thin HTTP layer that calls these tools and returns the result. That means the same tools are callable by any MCP client, not just this app's own frontend.
+
+| Tool | Args | What it does |
+|---|---|---|
+| `fetch_video_details` | `url` | Reads a video's existing captions/subtitles via `yt-dlp` — no video or audio download. Raises a distinct error if no captions exist, so the caller knows to fall back to Whisper. |
+| `summarize_transcript` | `transcript`, `target_language?` | Sends the transcript to Gemini, gets back `intro`, `key_points`, and a nested `roadmap` of topics/sub-topics with examples. If `target_language` is set, the whole output is written in that language regardless of the transcript's own. |
+| `explain_topic` | `heading`, `content`, `example?` | Asks Gemini to go deeper on one roadmap topic — context, nuance, common misconceptions — beyond what's already in `content`. |
+| `quiz_topic` | `heading`, `content`, `example?` | Gemini generates a 5-question multiple-choice quiz scoped to just that topic, difficulty-tagged, code-aware if the topic has a code example. |
+| `quiz_overall` | `roadmap`, `count` | Gemini generates a 10-15 question quiz spanning the whole roadmap, for the "Final Quiz" feature. |
+| `signup` | `email`, `password` | Creates an account (password hashed + salted before storage) and returns a session token. |
+| `login` | `email`, `password` | Verifies credentials and returns a fresh session token. |
+| `logout` | `token` | Invalidates a session token. |
+| `list_history` | `token` | Returns the *token owner's* saved analyses only — never another account's. |
+| `get_history_item` | `token`, `analysis_id` | Returns one saved analysis by id, scoped to the token's account; errors if it belongs to someone else. |
+| `update_done_topics` | `token`, `analysis_id`, `done_topics` | Overwrites which topics are marked done for one analysis, scoped the same way. |
+
+Every account/history tool takes a `token` as its first argument, resolves it server-side to a `user_id`, and scopes the query to that user — the token is the only thing that ties a request to an account, so one account can never read or modify another's data.
+
+## Sequence Diagram
 
 ```mermaid
 sequenceDiagram
