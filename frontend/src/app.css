@@ -646,7 +646,7 @@ a {
 .node-details {
 	position: relative;
 	margin-bottom: 0.75rem;
-	background: #fcfcfd;
+	background: var(--card-bg);
 	border: 1px solid var(--border-soft);
 	border-radius: 12px;
 	padding: 2.5rem 1.25rem 1rem;
@@ -673,7 +673,7 @@ a {
 	border-radius: 999px;
 	padding: 0.2rem 0.7rem;
 	cursor: pointer;
-	color: #444;
+	color: var(--text-primary);
 }
 
 .related-link:hover {
@@ -1059,6 +1059,20 @@ a {
 	box-sizing: border-box;
 }
 
+/* --- Results header / export --- */
+.results-header {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	flex-wrap: wrap;
+	gap: 0.5rem;
+	margin-bottom: 0.75rem;
+}
+
+.export-btn {
+	margin-left: auto;
+}
+
 /* --- Detected language badge --- */
 .language-badge {
 	display: inline-block;
@@ -1068,7 +1082,7 @@ a {
 	border: 1px solid var(--border-soft);
 	border-radius: 999px;
 	padding: 0.2rem 0.7rem;
-	margin-bottom: 0.75rem;
+	margin-bottom: 0;
 }
 
 /* --- Progress bar --- */

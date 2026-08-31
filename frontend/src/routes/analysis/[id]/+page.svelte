@@ -303,6 +303,90 @@
 		overallQuizSelected.clear();
 		runOverallQuiz();
 	}
+
+	function quizToMarkdown(questions: QuizQuestion[], heading: string): string {
+		const lines = [`#### ${heading}`, ''];
+		questions.forEach((q, i) => {
+			lines.push(`${i + 1}. ${q.question}${q.difficulty ? ` _(${q.difficulty})_` : ''}`);
+			q.options.forEach((opt, idx) => {
+				const marker = idx === q.answer_index ? '**✓**' : '-';
+				lines.push(`   ${marker} ${opt}`);
+			});
+			lines.push(`   > ${q.explanation}`, '');
+		});
+		return lines.join('\n');
+	}
+
+	function topicToMarkdown(topic: Topic, depth: number): string {
+		const lines: string[] = [];
+		const hashes = '#'.repeat(Math.min(depth + 2, 6));
+		lines.push(`${hashes} ${doneTopics.has(topic.heading) ? '✅ ' : ''}${topic.heading}`, '');
+		lines.push(topic.content, '');
+		if (topic.example) {
+			lines.push('**Example:**', '```', topic.example, '```', '');
+		}
+		const explanation = aiExplanations.get(topic.heading);
+		if (explanation?.length) {
+			lines.push('**AI Explanation:**', '');
+			for (const point of explanation) {
+				lines.push(`- **${point.title}** — ${point.detail}`);
+			}
+			lines.push('');
+		}
+		const quiz = quizzes.get(topic.heading);
+		if (quiz?.length) {
+			lines.push(quizToMarkdown(quiz, 'Quiz'), '');
+		}
+		if (topic.resources?.length) {
+			lines.push('**Related Videos:**', '');
+			for (const r of topic.resources) {
+				lines.push(`- [${r.title}](${r.url ?? '#'})`);
+			}
+			lines.push('');
+		}
+		if (topic.related?.length) {
+			lines.push(`**Related topics:** ${topic.related.join(', ')}`, '');
+		}
+		for (const child of topic.children ?? []) {
+			lines.push(topicToMarkdown(child, depth + 1));
+		}
+		return lines.join('\n');
+	}
+
+	function buildMarkdown(): string {
+		if (!result) return '';
+		const lines: string[] = [];
+		lines.push(`# ${result.source ?? 'Video Analysis'}`, '');
+		if (result.detected_language) {
+			lines.push(`_Detected language: ${languageLabel(result.detected_language)}_`, '');
+		}
+		lines.push('## Intro', '', result.intro, '');
+		lines.push('## Key Points', '');
+		for (const point of result.key_points) lines.push(`- ${point}`);
+		lines.push('');
+		lines.push('## Roadmap', '');
+		for (const topic of result.roadmap) lines.push(topicToMarkdown(topic, 0));
+		if (overallQuiz?.length) {
+			lines.push('## Final Quiz', '');
+			lines.push(quizToMarkdown(overallQuiz, 'Full Video Quiz'));
+		}
+		return lines.join('\n');
+	}
+
+	function downloadMarkdown() {
+		if (!result) return;
+		const markdown = buildMarkdown();
+		const blob = new Blob([markdown], { type: 'text/markdown' });
+		const url = URL.createObjectURL(blob);
+		const a = document.createElement('a');
+		const safeName = (result.source ?? 'analysis').replace(/[^a-z0-9]+/gi, '-').toLowerCase();
+		a.href = url;
+		a.download = `${safeName || 'analysis'}.md`;
+		document.body.appendChild(a);
+		a.click();
+		a.remove();
+		URL.revokeObjectURL(url);
+	}
 </script>
 
 <a class="back-link" href="/">← Back to upload</a>
@@ -313,9 +397,12 @@
 	<p class="error">{loadError}</p>
 {:else if result}
 	<section class="results card">
-		{#if result.detected_language}
-			<span class="language-badge">Detected language: {languageLabel(result.detected_language)}</span>
-		{/if}
+		<div class="results-header">
+			{#if result.detected_language}
+				<span class="language-badge">Detected language: {languageLabel(result.detected_language)}</span>
+			{/if}
+			<button class="ai-action-btn export-btn" onclick={downloadMarkdown}>⬇ Download as Markdown</button>
+		</div>
 
 		<p class="intro">{result.intro}</p>
 

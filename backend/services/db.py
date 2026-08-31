@@ -1,5 +1,6 @@
 import hashlib
 import json
+import os
 import re
 import secrets
 import sqlite3
@@ -7,7 +8,9 @@ from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-DB_PATH = Path(__file__).parent.parent / "app.db"
+# Overridable so a deployment can point this at a mounted volume (e.g. a
+# Docker volume) instead of the container's ephemeral filesystem.
+DB_PATH = Path(os.environ.get("DB_PATH", str(Path(__file__).parent.parent / "app.db")))
 
 SESSION_TTL_DAYS = 30
 PBKDF2_ITERATIONS = 200_000
@@ -36,6 +39,7 @@ def _cursor():
 
 
 def init_db() -> None:
+    DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     with _cursor() as cur:
         cur.execute(
             """CREATE TABLE IF NOT EXISTS users (
