@@ -5,3 +5,4 @@ uploads/*
 summaries/*
 !summaries/.gitkeep
 .env
+app.db

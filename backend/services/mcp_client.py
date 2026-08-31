@@ -86,6 +86,27 @@ class VideoDetailsMCPClient:
     async def quiz_overall(self, roadmap: list[dict], count: int = 12) -> dict:
         return await self._call("quiz_overall", {"roadmap": roadmap, "count": count})
 
+    async def signup(self, email: str, password: str) -> dict:
+        return await self._call("signup", {"email": email, "password": password})
+
+    async def login(self, email: str, password: str) -> dict:
+        return await self._call("login", {"email": email, "password": password})
+
+    async def logout(self, token: str) -> dict:
+        return await self._call("logout", {"token": token})
+
+    async def list_history(self, token: str) -> dict:
+        return await self._call("list_history", {"token": token})
+
+    async def get_history_item(self, token: str, analysis_id: int) -> dict:
+        return await self._call("get_history_item", {"token": token, "analysis_id": analysis_id})
+
+    async def update_done_topics(self, token: str, analysis_id: int, done_topics: list[str]) -> dict:
+        return await self._call(
+            "update_done_topics",
+            {"token": token, "analysis_id": analysis_id, "done_topics": done_topics},
+        )
+
     async def close(self):
         await self._stack.aclose()
         if self._process is not None and self._process.returncode is None:

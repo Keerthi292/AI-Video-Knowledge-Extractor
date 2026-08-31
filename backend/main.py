@@ -1,17 +1,16 @@
 import asyncio
-import json
 import uuid
 from contextlib import asynccontextmanager
-from datetime import datetime, timezone
 from pathlib import Path
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, UploadFile, File, Form, HTTPException
+from fastapi import Depends, FastAPI, UploadFile, File, Form, Header, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 load_dotenv()
 
+from services import db
 from services.audio_extractor import AudioExtractionError, extract_audio
 from services.downloader import VideoDownloadError, download_audio
 from services.mcp_client import MCPToolError, VideoDetailsMCPClient
@@ -21,6 +20,7 @@ from services.video_search import search_youtube_videos
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    db.init_db()
     mcp_client = VideoDetailsMCPClient()
     await mcp_client.connect()
     app.state.mcp_client = mcp_client
@@ -40,9 +40,6 @@ app.add_middleware(
 
 UPLOAD_DIR = Path(__file__).parent / "uploads"
 UPLOAD_DIR.mkdir(exist_ok=True)
-
-SUMMARIES_DIR = Path(__file__).parent / "summaries"
-SUMMARIES_DIR.mkdir(exist_ok=True)
 
 ALLOWED_CONTENT_TYPES = {"video/mp4", "video/quicktime", "video/x-matroska", "video/webm"}
 ALLOWED_EXTENSIONS = {".mp4", ".mov", ".mkv", ".webm"}
@@ -74,12 +71,23 @@ async def enrich_video_resources(roadmap: list[dict]) -> None:
     await asyncio.gather(*(fetch(topic) for topic in topics_with_resources))
 
 
-def save_summary(analysis: dict, source: str) -> None:
-    timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
-    summary_path = SUMMARIES_DIR / f"{timestamp}-{uuid.uuid4().hex[:8]}.json"
+def get_current_user(authorization: str | None = Header(default=None)) -> dict:
+    """Fast local auth guard used by every protected endpoint. Deliberately
+    does NOT go through the MCP tool server (unlike the auth/history
+    endpoints below) - this runs on every single request, so it stays a
+    direct DB check rather than adding an MCP round trip to every call."""
+    token = _bearer_token(authorization)
+    user = db.get_user_from_token(token)
+    if user is None:
+        raise HTTPException(status_code=401, detail="Session expired or invalid, please log in again")
 
-    with open(summary_path, "w") as f:
-        json.dump({"source": source, "generated_at": timestamp, **analysis}, f, indent=2)
+    return user
+
+
+def _bearer_token(authorization: str | None) -> str:
+    if not authorization or not authorization.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    return authorization.removeprefix("Bearer ").strip()
 
 
 async def _transcribe_url_via_audio(url: str) -> tuple[str, str | None]:
@@ -117,13 +125,92 @@ class OverallQuizRequest(BaseModel):
     roadmap: list[dict]
 
 
+class SignupRequest(BaseModel):
+    email: str
+    password: str
+
+
+class LoginRequest(BaseModel):
+    email: str
+    password: str
+
+
+class DoneTopicsRequest(BaseModel):
+    done_topics: list[str]
+
+
 @app.get("/api/health")
 def health_check():
     return {"status": "ok"}
 
 
+@app.post("/api/auth/signup")
+async def signup(body: SignupRequest):
+    try:
+        return await app.state.mcp_client.signup(body.email, body.password)
+    except MCPToolError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@app.post("/api/auth/login")
+async def login(body: LoginRequest):
+    try:
+        return await app.state.mcp_client.login(body.email, body.password)
+    except MCPToolError as exc:
+        raise HTTPException(status_code=401, detail=str(exc))
+
+
+@app.post("/api/auth/logout")
+async def logout(authorization: str | None = Header(default=None)):
+    if authorization and authorization.startswith("Bearer "):
+        try:
+            await app.state.mcp_client.logout(authorization.removeprefix("Bearer ").strip())
+        except MCPToolError:
+            pass  # logout is best-effort; an already-invalid token is fine
+    return {"success": True}
+
+
+@app.get("/api/auth/me")
+def me(user: dict = Depends(get_current_user)):
+    return {"email": user["email"]}
+
+
+@app.get("/api/history")
+async def history(authorization: str | None = Header(default=None)):
+    token = _bearer_token(authorization)
+    try:
+        return await app.state.mcp_client.list_history(token)
+    except MCPToolError as exc:
+        raise HTTPException(status_code=401, detail=str(exc))
+
+
+@app.get("/api/history/{analysis_id}")
+async def history_item(analysis_id: int, authorization: str | None = Header(default=None)):
+    token = _bearer_token(authorization)
+    try:
+        analysis = await app.state.mcp_client.get_history_item(token, analysis_id)
+    except MCPToolError as exc:
+        message = str(exc)
+        status_code = 401 if "Not authenticated" in message else 404
+        raise HTTPException(status_code=status_code, detail=message)
+    return {"success": True, **analysis}
+
+
+@app.put("/api/history/{analysis_id}/done-topics")
+async def update_done_topics(
+    analysis_id: int, body: DoneTopicsRequest, authorization: str | None = Header(default=None)
+):
+    token = _bearer_token(authorization)
+    try:
+        return await app.state.mcp_client.update_done_topics(token, analysis_id, body.done_topics)
+    except MCPToolError as exc:
+        message = str(exc)
+        status_code = 401 if "Not authenticated" in message else 404
+        raise HTTPException(status_code=status_code, detail=message)
+
+
 @app.post("/api/topic/explain")
-async def topic_explain(body: TopicRequest):
+async def topic_explain(body: TopicRequest, user: dict = Depends(get_current_user)):
     try:
         return await app.state.mcp_client.explain_topic(body.heading, body.content, body.example)
     except MCPToolError as exc:
@@ -131,7 +218,7 @@ async def topic_explain(body: TopicRequest):
 
 
 @app.post("/api/topic/quiz")
-async def topic_quiz(body: TopicRequest):
+async def topic_quiz(body: TopicRequest, user: dict = Depends(get_current_user)):
     try:
         return await app.state.mcp_client.quiz_topic(body.heading, body.content, body.example)
     except MCPToolError as exc:
@@ -139,7 +226,7 @@ async def topic_quiz(body: TopicRequest):
 
 
 @app.post("/api/quiz/overall")
-async def overall_quiz(body: OverallQuizRequest):
+async def overall_quiz(body: OverallQuizRequest, user: dict = Depends(get_current_user)):
     try:
         return await app.state.mcp_client.quiz_overall(body.roadmap, count=12)
     except MCPToolError as exc:
@@ -151,6 +238,7 @@ async def analyze_video(
     file: UploadFile | None = File(None),
     url: str | None = Form(None),
     target_language: str | None = Form(None),
+    user: dict = Depends(get_current_user),
 ):
     if not file and not url:
         raise HTTPException(status_code=400, detail="Provide either a video file or a video URL")
@@ -183,15 +271,17 @@ async def analyze_video(
 
         await enrich_video_resources(analysis["roadmap"])
 
-        save_summary(analysis, source=url)
+        analysis_id = db.save_analysis(user["id"], url, analysis, detected_language)
 
         return {
             "success": True,
+            "id": analysis_id,
             "intro": analysis["intro"],
             "key_points": analysis["key_points"],
             "roadmap": analysis["roadmap"],
             "source": url,
             "detected_language": detected_language,
+            "done_topics": [],
         }
 
     extension = Path(file.filename).suffix.lower()
@@ -228,15 +318,17 @@ async def analyze_video(
 
         await enrich_video_resources(analysis["roadmap"])
 
-        save_summary(analysis, source=file.filename)
+        analysis_id = db.save_analysis(user["id"], file.filename, analysis, detected_language)
 
         return {
             "success": True,
+            "id": analysis_id,
             "intro": analysis["intro"],
             "key_points": analysis["key_points"],
             "roadmap": analysis["roadmap"],
             "source": file.filename,
             "detected_language": detected_language,
+            "done_topics": [],
         }
     finally:
         temp_path.unlink(missing_ok=True)

@@ -1,6 +1,6 @@
 # AI-Video-Knowledge-Extractor
 
-AI-powered video knowledge extractor that turns an uploaded video or a video URL (YouTube, etc.) into a transcript, an intro, key points, and an interactive learning roadmap — with AI explanations, per-topic quizzes, and a full quiz covering the whole video, optionally translated into a language of your choice — using Whisper, Gemini, and yt-dlp, with a SvelteKit frontend and a FastAPI backend.
+AI-powered video knowledge extractor that turns an uploaded video or a video URL (YouTube, etc.) into a transcript, an intro, key points, and an interactive learning roadmap — with AI explanations, per-topic quizzes, and a full quiz covering the whole video, optionally translated into a language of your choice — using Whisper, Gemini, and yt-dlp, with a SvelteKit frontend and a FastAPI backend. Multiple people can sign up and use it for their own personal use — each account only ever sees its own analysis history.
 
 ## Architecture
 
@@ -23,7 +23,8 @@ Either way, the resulting transcript is sent to Gemini, which returns an intro, 
 
 ```mermaid
 flowchart TD
-    A[User: upload file OR paste video URL] --> B{Input type?}
+    Z[User: sign up / log in] --> A[User: upload file OR paste video URL]
+    A --> B{Input type?}
 
     B -- URL --> C["MCP tool: fetch_video_details<br/>(yt-dlp captions, no download)"]
     C --> D{Captions found?}
@@ -41,6 +42,7 @@ flowchart TD
     L -- "Final Quiz" --> O["MCP tool: quiz_overall (Gemini)"] --> L
 ```
 
+0. The user signs up or logs in; the frontend stores the returned session token and sends it as `Authorization: Bearer <token>` on every subsequent request.
 1. The user uploads a video file or pastes a video URL in the SvelteKit UI and clicks **Analyze Video**.
 2. **URL** → the FastAPI backend calls the `fetch_video_details` MCP tool, which uses `yt-dlp` to read the video's existing captions/subtitles without downloading anything.
    - If captions exist, that's the transcript.
@@ -48,7 +50,7 @@ flowchart TD
 3. **File upload** → FFmpeg strips the audio out of the uploaded video, then Whisper transcribes it.
 4. The transcript goes to the `summarize_transcript` MCP tool (Gemini), which returns an `intro`, `key_points`, and a `roadmap` tree of topics/sub-topics, each with an in-depth explanation and a concrete example pulled from the transcript. If the user picked an output language (next to the URL field), the whole roadmap is written in that language regardless of the transcript's own language; the detected transcript language is also surfaced as a badge on the results.
 5. Each roadmap topic's placeholder resources are replaced with real YouTube videos via a `yt-dlp` search sorted by upload date (most recent first).
-6. The full analysis is saved to disk as JSON and returned to the frontend, which renders the intro, key points, and an interactive roadmap.
+6. The full analysis is saved to the current user's account in SQLite and returned to the frontend, which renders the intro, key points, and an interactive roadmap. It's also reachable later via **History**.
 7. From there the user can, per topic, click **Explain** (`explain_topic` MCP tool) for a deeper AI breakdown, or **Quiz me** (`quiz_topic` MCP tool) for a 5-question quiz on just that topic — testing actual code from the example when the topic involves code.
 8. Once done with the roadmap, **Take Full Quiz** calls the `quiz_overall` MCP tool, which generates 10-15 questions spread across every module in the roadmap, then shows a final score with an option to retake.
 
@@ -62,12 +64,17 @@ sequenceDiagram
     participant MCP as MCP Tools
     participant G as Gemini
 
+    User->>UI: Sign up / log in
+    UI->>API: POST /api/auth/signup or /login
+    API-->>UI: session token
+
     User->>UI: Upload / paste URL
-    UI->>API: POST /api/analyze
+    UI->>API: POST /api/analyze (Bearer token)
     API->>API: Get transcript (captions / Whisper)
     API->>MCP: summarize_transcript
     MCP->>G: generate roadmap
     G-->>API: intro + key points + roadmap
+    API->>API: save analysis for this user (SQLite)
     API-->>UI: render roadmap
 
     User->>UI: Explain / Quiz me / Final Quiz
@@ -89,9 +96,16 @@ sequenceDiagram
 | **FFmpeg** | Audio extraction | Strips clean audio out of any uploaded video container for Whisper to consume. |
 | **Whisper** | Speech-to-text | Turns spoken audio into text that other AI can reason over (used when no captions are available). |
 | **Gemini** | Summarization / reasoning | Turns the raw transcript into an intro, key points, and a roadmap, and powers on-demand topic explanations and quizzes. |
+| **SQLite** | Accounts + analysis history | A single local file (`backend/app.db`), zero extra services to run — fits a self-hosted, personal-use app; stores users, sessions, and each user's saved analyses. |
+
+## Accounts
+
+Each person signs up with an email + password (`POST /api/auth/signup`) and logs in (`POST /api/auth/login`) to get a session token (a random opaque token, not a JWT), sent as `Authorization: Bearer <token>` on every other request. Passwords are salted and hashed with PBKDF2-SHA256 (stdlib `hashlib`, no extra dependency); sessions expire after 30 days and can be ended early with `POST /api/auth/logout`. Every analysis is saved under the account that ran it (`backend/services/db.py`), and `GET /api/history` / `GET /api/history/{id}` let a user browse and reopen their own past analyses — one account never sees another's data.
 
 ## Features
 
+- **Sign up / log in**: multiple people can use the same deployment, each with their own private history
+- **History**: browse and reopen your own past analyses without re-running them
 - Upload a video file **or** paste a video URL (YouTube, Google Drive, etc.)
 - Transcript extraction via captions first (fast, no download), falling back to Whisper transcription
 - AI-generated intro, key points, and a topic roadmap (with sub-topics and concrete examples from the transcript)
@@ -118,21 +132,22 @@ sequenceDiagram
 - `backend/services/summarizer.py` — Gemini transcript → roadmap
 - `backend/services/topic_assistant.py` — Gemini topic explain / per-topic quiz / overall quiz
 - `backend/services/video_search.py` — yt-dlp YouTube search for related videos, sorted by upload date
+- `backend/services/db.py` — SQLite: users, sessions, and each user's saved analyses
 - `backend/uploads/` — temp storage for uploaded videos/audio
-- `backend/summaries/` — saved JSON of each analysis result
+- `backend/app.db` — SQLite database file (created on first run, gitignored)
 - `backend/.env` — API keys (Gemini)
 
 **Frontend (SvelteKit)**
-- `frontend/src/routes/+page.svelte` — the whole UI: upload form, roadmap, explain/quiz panels, final quiz
+- `frontend/src/routes/+page.svelte` — the whole UI: login/signup, history, upload form, roadmap, explain/quiz panels, final quiz
 
 ## Out of Scope for V1
 
-- No user accounts/auth
-- No database (results are saved to disk as JSON, not queryable)
 - No async job queues/background workers — processing happens synchronously per request
 - No cloud storage — just local disk for temp files
 - No streaming/progress bars — user waits for the full result
-- "Mark as done" state is stored in the browser's `localStorage`, keyed only by topic heading — it isn't scoped per-video, so two different videos sharing a topic heading will share its done state
+- No password reset / email verification — signup is instant, and a forgotten password currently means creating a new account
+- "Mark as done" state is stored in the browser's `localStorage`, keyed only by topic heading — it isn't scoped per-video (or per-account), so two different videos sharing a topic heading will share its done state
+- `backend/summaries/*.json` are leftover files from before accounts/database existed — new analyses go into `backend/app.db` instead and aren't tied to any account
 
 ## Running Locally
 
@@ -154,4 +169,4 @@ Set `GEMINI_API_KEY` in `backend/.env` (see `backend/.env.example`) — get a fr
 
 ## Status
 
-Core pipeline, URL support with captions/Whisper fallback, the interactive roadmap UI, real related-video search, AI topic explain/quiz, the full-roadmap quiz, quiz difficulty tags, multi-language output, and the MCP tool server are all in place end-to-end. UI extras (dark mode, progress tracking, search) round out the study experience.
+Core pipeline, URL support with captions/Whisper fallback, the interactive roadmap UI, real related-video search, AI topic explain/quiz, the full-roadmap quiz, quiz difficulty tags, multi-language output, multi-user accounts with per-user history, and the MCP tool server are all in place end-to-end. UI extras (dark mode, progress tracking, search) round out the study experience.
