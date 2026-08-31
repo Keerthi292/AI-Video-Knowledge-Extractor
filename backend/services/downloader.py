@@ -20,20 +20,21 @@ class TranscriptUnavailableError(Exception):
     pass
 
 
-def _pick_subtitle_track(subtitles: dict) -> list | None:
+def _pick_subtitle_track(subtitles: dict) -> tuple[str, list] | tuple[None, None]:
     """Pick a subtitle track from a yt-dlp subtitles/automatic_captions dict.
 
     Prefers English variants, falling back to whatever language is first
-    available, so we still get a transcript for non-English videos.
+    available, so we still get a transcript for non-English videos. Returns
+    (language_code, track) so callers can report what language was used.
     """
     if not subtitles:
-        return None
+        return None, None
 
     for lang in PREFERRED_LANGUAGES:
         if lang in subtitles:
-            return subtitles[lang]
+            return lang, subtitles[lang]
 
-    return next(iter(subtitles.values()), None)
+    return next(iter(subtitles.items()), (None, None))
 
 
 def _vtt_to_text(vtt: str) -> str:
@@ -101,9 +102,9 @@ def get_video_transcript(url: str) -> tuple[str, dict]:
     except yt_dlp.utils.DownloadError as exc:
         raise VideoDownloadError(f"Could not read video info from URL: {exc}")
 
-    track = _pick_subtitle_track(info.get("subtitles") or {})
+    language, track = _pick_subtitle_track(info.get("subtitles") or {})
     if track is None:
-        track = _pick_subtitle_track(info.get("automatic_captions") or {})
+        language, track = _pick_subtitle_track(info.get("automatic_captions") or {})
 
     if track is None:
         raise TranscriptUnavailableError(
@@ -127,6 +128,7 @@ def get_video_transcript(url: str) -> tuple[str, dict]:
         "description": info.get("description"),
         "uploader": info.get("uploader"),
         "duration": info.get("duration"),
+        "language": (language or "").split("-")[0] or None,
     }
 
     return transcript, metadata

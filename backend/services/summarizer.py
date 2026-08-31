@@ -99,6 +99,8 @@ Each topic (top-level or child) has:
 Base your answer only on the transcript text below. Do not invent details
 that aren't in it.
 
+{language_instruction}
+
 Transcript:
 \"\"\"
 {transcript}
@@ -110,13 +112,20 @@ class SummarizationError(Exception):
     pass
 
 
-def summarize_transcript(transcript: str) -> dict:
+def summarize_transcript(transcript: str, target_language: str | None = None) -> dict:
     api_key = os.environ.get("GEMINI_API_KEY")
     if not api_key:
         raise SummarizationError("GEMINI_API_KEY environment variable is not set")
 
     client = genai.Client(api_key=api_key)
-    prompt = PROMPT_TEMPLATE.format(transcript=transcript)
+    language_instruction = (
+        f"Write your entire response (intro, key_points, and every roadmap "
+        f"field) in {target_language}, regardless of what language the "
+        f"transcript is in."
+        if target_language
+        else ""
+    )
+    prompt = PROMPT_TEMPLATE.format(transcript=transcript, language_instruction=language_instruction)
 
     try:
         response = client.models.generate_content(

@@ -1,6 +1,6 @@
 # AI-Video-Knowledge-Extractor
 
-AI-powered video knowledge extractor that turns an uploaded video or a video URL (YouTube, etc.) into a transcript, an intro, key points, and an interactive learning roadmap — with AI explanations, per-topic quizzes, and a full quiz covering the whole video — using Whisper, Gemini, and yt-dlp, with a SvelteKit frontend and a FastAPI backend.
+AI-powered video knowledge extractor that turns an uploaded video or a video URL (YouTube, etc.) into a transcript, an intro, key points, and an interactive learning roadmap — with AI explanations, per-topic quizzes, and a full quiz covering the whole video, optionally translated into a language of your choice — using Whisper, Gemini, and yt-dlp, with a SvelteKit frontend and a FastAPI backend.
 
 ## Architecture
 
@@ -32,7 +32,7 @@ flowchart TD
 
     B -- File --> H[FFmpeg: extract audio] --> I[Whisper: transcribe] --> E
 
-    E --> J["MCP tool: summarize_transcript<br/>(Gemini) → intro + key points + roadmap"]
+    E --> J["MCP tool: summarize_transcript<br/>(Gemini) → intro + key points + roadmap<br/>(optionally in a chosen output language)"]
     J --> K[yt-dlp: related videos per topic]
     K --> L[SvelteKit renders roadmap]
 
@@ -46,7 +46,7 @@ flowchart TD
    - If captions exist, that's the transcript.
    - If not, the backend downloads just the audio track (`yt-dlp`) and transcribes it with Whisper.
 3. **File upload** → FFmpeg strips the audio out of the uploaded video, then Whisper transcribes it.
-4. The transcript goes to the `summarize_transcript` MCP tool (Gemini), which returns an `intro`, `key_points`, and a `roadmap` tree of topics/sub-topics, each with an in-depth explanation and a concrete example pulled from the transcript.
+4. The transcript goes to the `summarize_transcript` MCP tool (Gemini), which returns an `intro`, `key_points`, and a `roadmap` tree of topics/sub-topics, each with an in-depth explanation and a concrete example pulled from the transcript. If the user picked an output language (next to the URL field), the whole roadmap is written in that language regardless of the transcript's own language; the detected transcript language is also surfaced as a badge on the results.
 5. Each roadmap topic's placeholder resources are replaced with real YouTube videos via a `yt-dlp` search sorted by upload date (most recent first).
 6. The full analysis is saved to disk as JSON and returned to the frontend, which renders the intro, key points, and an interactive roadmap.
 7. From there the user can, per topic, click **Explain** (`explain_topic` MCP tool) for a deeper AI breakdown, or **Quiz me** (`quiz_topic` MCP tool) for a 5-question quiz on just that topic — testing actual code from the example when the topic involves code.
@@ -95,11 +95,15 @@ sequenceDiagram
 - Upload a video file **or** paste a video URL (YouTube, Google Drive, etc.)
 - Transcript extraction via captions first (fast, no download), falling back to Whisper transcription
 - AI-generated intro, key points, and a topic roadmap (with sub-topics and concrete examples from the transcript)
+- **Output language**: pick a language next to the URL field to have the whole roadmap written in it, regardless of the video's own language; the detected transcript language is shown as a badge on the results
 - Real, recently-uploaded related YouTube videos suggested per topic
 - **Explain**: an on-demand, deeper AI explanation for any topic
-- **Quiz me**: a 5-question multiple-choice quiz for a single topic
-- **Final Quiz**: a longer (10-15 question) multiple-choice quiz covering the whole roadmap, with scoring and retake
+- **Quiz me**: a 5-question multiple-choice quiz for a single topic, tagged easy/medium/hard per question
+- **Final Quiz**: a longer (10-15 question) multiple-choice quiz covering the whole roadmap, with scoring, retake, and the same difficulty tags
 - Quiz questions test actual code from the video's examples where relevant (output prediction, spot-the-bug, etc.), rendered with proper code formatting
+- **Mark topic as done**: a checkbox per topic tracks study progress, shown as a progress bar over the roadmap (persisted in the browser)
+- **Search/filter**: filter the roadmap down to topics whose heading or content matches a query
+- **Dark mode**: a toggle in the corner switches the whole UI theme, remembered across visits
 
 ## Project Structure
 
@@ -128,6 +132,7 @@ sequenceDiagram
 - No async job queues/background workers — processing happens synchronously per request
 - No cloud storage — just local disk for temp files
 - No streaming/progress bars — user waits for the full result
+- "Mark as done" state is stored in the browser's `localStorage`, keyed only by topic heading — it isn't scoped per-video, so two different videos sharing a topic heading will share its done state
 
 ## Running Locally
 
@@ -149,4 +154,4 @@ Set `GEMINI_API_KEY` in `backend/.env` (see `backend/.env.example`) — get a fr
 
 ## Status
 
-Core pipeline, URL support with captions/Whisper fallback, the interactive roadmap UI, real related-video search, AI topic explain/quiz, the full-roadmap quiz, and the MCP tool server are all in place end-to-end.
+Core pipeline, URL support with captions/Whisper fallback, the interactive roadmap UI, real related-video search, AI topic explain/quiz, the full-roadmap quiz, quiz difficulty tags, multi-language output, and the MCP tool server are all in place end-to-end. UI extras (dark mode, progress tracking, search) round out the study experience.

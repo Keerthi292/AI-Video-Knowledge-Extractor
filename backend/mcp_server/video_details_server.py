@@ -34,11 +34,12 @@ def fetch_video_details(url: str) -> dict:
 
 
 @mcp.tool()
-def summarize_transcript(transcript: str) -> dict:
+def summarize_transcript(transcript: str, target_language: str | None = None) -> dict:
     """Summarize a video transcript with Gemini into an intro, key points,
-    and a learning-roadmap topic tree."""
+    and a learning-roadmap topic tree, optionally written in a chosen
+    target_language regardless of the transcript's own language."""
     try:
-        return _summarize_transcript(transcript)
+        return _summarize_transcript(transcript, target_language)
     except SummarizationError as exc:
         raise ToolError(str(exc))
 

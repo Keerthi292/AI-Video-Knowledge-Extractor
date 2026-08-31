@@ -82,9 +82,9 @@ def save_summary(analysis: dict, source: str) -> None:
         json.dump({"source": source, "generated_at": timestamp, **analysis}, f, indent=2)
 
 
-async def _transcribe_url_via_audio(url: str) -> str:
+async def _transcribe_url_via_audio(url: str) -> tuple[str, str | None]:
     """Fallback for URLs with no usable captions: download just the audio
-    and transcribe it locally with Whisper."""
+    and transcribe it locally with Whisper. Returns (transcript, language)."""
     try:
         raw_audio_path = download_audio(url, UPLOAD_DIR)
     except VideoDownloadError as exc:
@@ -150,6 +150,7 @@ async def overall_quiz(body: OverallQuizRequest):
 async def analyze_video(
     file: UploadFile | None = File(None),
     url: str | None = Form(None),
+    target_language: str | None = Form(None),
 ):
     if not file and not url:
         raise HTTPException(status_code=400, detail="Provide either a video file or a video URL")
@@ -161,20 +162,22 @@ async def analyze_video(
         # Try captions first via the MCP server (no video/audio download).
         # If no usable captions exist, fall back to downloading just the
         # audio and transcribing it with Whisper, same as an uploaded file.
+        detected_language: str | None = None
         try:
             details = await app.state.mcp_client.fetch_video_details(url)
             transcript = details["transcript"]
+            detected_language = details.get("language")
         except MCPToolError as exc:
             message = str(exc)
             if "TRANSCRIPT_UNAVAILABLE:" in message:
-                transcript = await _transcribe_url_via_audio(url)
+                transcript, detected_language = await _transcribe_url_via_audio(url)
             elif "VIDEO_DOWNLOAD_ERROR:" in message:
                 raise HTTPException(status_code=400, detail=message.split("VIDEO_DOWNLOAD_ERROR:", 1)[1].strip())
             else:
                 raise HTTPException(status_code=502, detail=f"Video details MCP tool failed: {message}")
 
         try:
-            analysis = await app.state.mcp_client.summarize_transcript(transcript)
+            analysis = await app.state.mcp_client.summarize_transcript(transcript, target_language)
         except MCPToolError as exc:
             raise HTTPException(status_code=500, detail=str(exc))
 
@@ -187,6 +190,8 @@ async def analyze_video(
             "intro": analysis["intro"],
             "key_points": analysis["key_points"],
             "roadmap": analysis["roadmap"],
+            "source": url,
+            "detected_language": detected_language,
         }
 
     extension = Path(file.filename).suffix.lower()
@@ -212,12 +217,12 @@ async def analyze_video(
             raise HTTPException(status_code=500, detail=str(exc))
 
         try:
-            transcript = transcribe_audio(audio_path)
+            transcript, detected_language = transcribe_audio(audio_path)
         except TranscriptionError as exc:
             raise HTTPException(status_code=500, detail=str(exc))
 
         try:
-            analysis = await app.state.mcp_client.summarize_transcript(transcript)
+            analysis = await app.state.mcp_client.summarize_transcript(transcript, target_language)
         except MCPToolError as exc:
             raise HTTPException(status_code=500, detail=str(exc))
 
@@ -230,6 +235,8 @@ async def analyze_video(
             "intro": analysis["intro"],
             "key_points": analysis["key_points"],
             "roadmap": analysis["roadmap"],
+            "source": file.filename,
+            "detected_language": detected_language,
         }
     finally:
         temp_path.unlink(missing_ok=True)

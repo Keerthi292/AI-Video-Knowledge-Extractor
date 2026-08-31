@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { onMount } from 'svelte';
 	import { SvelteSet, SvelteMap } from 'svelte/reactivity';
 	import { slide } from 'svelte/transition';
 
@@ -24,6 +25,8 @@
 		intro: string;
 		key_points: string[];
 		roadmap: Topic[];
+		source?: string;
+		detected_language?: string | null;
 	};
 
 	type QuizQuestion = {
@@ -31,12 +34,36 @@
 		options: string[];
 		answer_index: number;
 		explanation: string;
+		difficulty?: 'easy' | 'medium' | 'hard';
 	};
 
 	type ExplainPoint = {
 		title: string;
 		detail: string;
 	};
+
+	const LANGUAGE_NAMES: Record<string, string> = {
+		en: 'English',
+		es: 'Spanish',
+		fr: 'French',
+		de: 'German',
+		hi: 'Hindi',
+		ta: 'Tamil',
+		te: 'Telugu',
+		kn: 'Kannada',
+		ml: 'Malayalam',
+		zh: 'Chinese',
+		ja: 'Japanese',
+		ko: 'Korean',
+		pt: 'Portuguese',
+		ru: 'Russian',
+		ar: 'Arabic',
+		it: 'Italian'
+	};
+
+	function languageLabel(code: string) {
+		return LANGUAGE_NAMES[code] ?? code.toUpperCase();
+	}
 
 	type TextSegment = { type: 'text' | 'code'; content: string };
 
@@ -82,6 +109,107 @@
 	let overallQuizError: string | null = $state(null);
 	let overallQuizIndex = $state(0);
 	let overallQuizSelected = new SvelteMap<number, number>();
+
+	// --- Dark mode ---
+	let theme: 'light' | 'dark' = $state('light');
+
+	function applyTheme(next: 'light' | 'dark') {
+		theme = next;
+		document.documentElement.setAttribute('data-theme', next);
+		try {
+			localStorage.setItem('theme', next);
+		} catch {
+			// localStorage unavailable - theme just won't persist
+		}
+	}
+
+	function toggleTheme() {
+		applyTheme(theme === 'dark' ? 'light' : 'dark');
+	}
+
+	onMount(() => {
+		let stored: string | null = null;
+		try {
+			stored = localStorage.getItem('theme');
+		} catch {
+			// ignore
+		}
+		const prefersDark = window.matchMedia?.('(prefers-color-scheme: dark)').matches;
+		applyTheme(stored === 'dark' || stored === 'light' ? stored : prefersDark ? 'dark' : 'light');
+		loadDoneTopics();
+	});
+
+	// --- Mark topic as done ---
+	let doneTopics = new SvelteSet<string>();
+
+	function loadDoneTopics() {
+		try {
+			const raw = localStorage.getItem('done-topics');
+			if (raw) for (const heading of JSON.parse(raw) as string[]) doneTopics.add(heading);
+		} catch {
+			// ignore
+		}
+	}
+
+	function saveDoneTopics() {
+		try {
+			localStorage.setItem('done-topics', JSON.stringify([...doneTopics]));
+		} catch {
+			// ignore
+		}
+	}
+
+	function toggleTopicDone(heading: string, event: Event) {
+		event.stopPropagation();
+		if (doneTopics.has(heading)) {
+			doneTopics.delete(heading);
+		} else {
+			doneTopics.add(heading);
+		}
+		saveDoneTopics();
+	}
+
+	function allTopics(roadmap: Topic[]): Topic[] {
+		const all: Topic[] = [];
+		for (const topic of roadmap) {
+			all.push(topic);
+			for (const child of topic.children ?? []) all.push(child);
+		}
+		return all;
+	}
+
+	let progress = $derived.by(() => {
+		if (!result) return { done: 0, total: 0 };
+		const topics = allTopics(result.roadmap);
+		const done = topics.filter((t) => doneTopics.has(t.heading)).length;
+		return { done, total: topics.length };
+	});
+
+	// --- Search / filter roadmap ---
+	let searchQuery = $state('');
+
+	function topicMatches(topic: Topic, query: string) {
+		const q = query.toLowerCase();
+		return topic.heading.toLowerCase().includes(q) || topic.content.toLowerCase().includes(q);
+	}
+
+	let filteredRoadmap = $derived.by(() => {
+		if (!result) return [];
+		const query = searchQuery.trim();
+		if (!query) return result.roadmap;
+		const out: Topic[] = [];
+		for (const topic of result.roadmap) {
+			const selfMatches = topicMatches(topic, query);
+			const matchingChildren = (topic.children ?? []).filter((c) => topicMatches(c, query));
+			if (selfMatches || matchingChildren.length) {
+				out.push(selfMatches ? topic : { ...topic, children: matchingChildren });
+			}
+		}
+		return out;
+	});
+
+	// --- Multi-language ---
+	let targetLanguage = $state('');
 
 	async function copyExample(heading: string, text: string) {
 		try {
@@ -311,6 +439,7 @@
 		} else {
 			formData.append('url', videoUrl);
 		}
+		if (targetLanguage) formData.append('target_language', targetLanguage);
 
 		try {
 			const response = await fetch(API_URL, {
@@ -338,6 +467,7 @@
 			overallQuizError = null;
 			overallQuizIndex = 0;
 			overallQuizSelected.clear();
+			searchQuery = '';
 			uiState = 'SUCCESS';
 		} catch (err) {
 			errorMessage = err instanceof Error ? err.message : 'Something went wrong';
@@ -347,6 +477,14 @@
 </script>
 
 <main>
+	<button
+		class="theme-toggle"
+		aria-label={theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
+		onclick={toggleTheme}
+	>
+		{theme === 'dark' ? '☀️' : '🌙'}
+	</button>
+
 	<h1>AI Video Knowledge Extractor</h1>
 	<p class="tagline">Turn any video into a structured, interactive learning roadmap.</p>
 
@@ -375,13 +513,25 @@
 
 		<p class="or-divider">or</p>
 
-		<input
-			type="url"
-			class="url-input"
-			placeholder="Paste a YouTube / Google Drive / video link"
-			value={videoUrl}
-			oninput={handleUrlInput}
-		/>
+		<div class="url-row">
+			<input
+				type="url"
+				class="url-input"
+				placeholder="Paste a YouTube / Google Drive / video link"
+				value={videoUrl}
+				oninput={handleUrlInput}
+			/>
+
+			<label class="language-select-label">
+				Output language
+				<select class="language-select" bind:value={targetLanguage}>
+					<option value="">Auto</option>
+					{#each Object.values(LANGUAGE_NAMES) as name}
+						<option value={name}>{name}</option>
+					{/each}
+				</select>
+			</label>
+		</div>
 
 		<button
 			class="analyze-btn"
@@ -402,6 +552,10 @@
 
 	{#if uiState === 'SUCCESS' && result}
 		<section class="results card">
+			{#if result.detected_language}
+				<span class="language-badge">Detected language: {languageLabel(result.detected_language)}</span>
+			{/if}
+
 			<p class="intro">{result.intro}</p>
 
 			<h2>Key Points</h2>
@@ -410,6 +564,25 @@
 					<li>{point}</li>
 				{/each}
 			</ul>
+
+			{#if progress.total > 0}
+				<div class="progress-wrap">
+					<div class="progress-label">
+						<span>Study progress</span>
+						<span>{progress.done} / {progress.total} topics done</span>
+					</div>
+					<div class="progress-bar">
+						<div class="progress-fill" style:width="{(progress.done / progress.total) * 100}%"></div>
+					</div>
+				</div>
+			{/if}
+
+			<input
+				type="search"
+				class="topic-search"
+				placeholder="Search roadmap topics…"
+				bind:value={searchQuery}
+			/>
 
 			{#snippet quizText(text: string)}
 				{#each parseCodeSegments(text) as segment}
@@ -431,6 +604,15 @@
 						>
 							×
 						</button>
+
+						<label class="done-checkbox">
+							<input
+								type="checkbox"
+								checked={doneTopics.has(topic.heading)}
+								onclick={(e) => toggleTopicDone(topic.heading, e)}
+							/>
+							Mark as done
+						</label>
 
 						<p class="explanation">{topic.content}</p>
 						{#if topic.example}
@@ -507,6 +689,11 @@
 									<strong>Quiz</strong>
 									<span class="quiz-progress">Question {qIndex + 1} of {questions.length}</span>
 								</div>
+								{#if question.difficulty}
+									<span class="difficulty-badge difficulty-{question.difficulty}">
+										{question.difficulty}
+									</span>
+								{/if}
 								<div class="quiz-question">{@render quizText(question.question)}</div>
 								<div class="quiz-options">
 									{#each question.options as option, idx}
@@ -564,8 +751,11 @@
 
 			<h2>Roadmap</h2>
 			<p class="roadmap-hint">Click a topic to expand it.</p>
+			{#if searchQuery.trim() && filteredRoadmap.length === 0}
+				<p class="roadmap-hint">No topics match "{searchQuery}".</p>
+			{/if}
 			<div class="roadmap">
-				{#each result.roadmap as topic, i}
+				{#each filteredRoadmap as topic, i}
 					<div class="roadmap-node">
 						<div class="node-marker" class:marker-active={expandedTopics.has(topic.heading)}>
 							{i + 1}
@@ -632,6 +822,11 @@
 								Question {overallQuizIndex + 1} of {overallQuiz.length}
 							</span>
 						</div>
+						{#if question.difficulty}
+							<span class="difficulty-badge difficulty-{question.difficulty}">
+								{question.difficulty}
+							</span>
+						{/if}
 						<div class="quiz-question">{@render quizText(question.question)}</div>
 						<div class="quiz-options">
 							{#each question.options as option, idx}
@@ -670,9 +865,48 @@
 </main>
 
 <style>
+	:global(:root) {
+		--page-bg-start: #fff7f4;
+		--page-bg-end: #f4f6fb;
+		--text-primary: #333;
+		--text-secondary: #555;
+		--text-muted: #888;
+		--text-faint: #999;
+		--border-color: #ddd;
+		--border-soft: #eee;
+		--surface: #fafafa;
+		--surface-hover: #eee;
+		--surface-alt: #f0f0f0;
+		--card-bg: #fff;
+		--tint-bg: #fff7f4;
+		--tint-bg-strong: #fff0eb;
+		--mix-light: white;
+		--mix-dark: black;
+	}
+
+	:global(:root[data-theme='dark']) {
+		--page-bg-start: #14141d;
+		--page-bg-end: #1a1a24;
+		--text-primary: #eaeaf0;
+		--text-secondary: #b8b8c5;
+		--text-muted: #8f8fa3;
+		--text-faint: #7a7a8c;
+		--border-color: #3a3a4a;
+		--border-soft: #2c2c3a;
+		--surface: #21212e;
+		--surface-hover: #2a2a38;
+		--surface-alt: #262633;
+		--card-bg: #1c1c27;
+		--tint-bg: rgba(255, 62, 0, 0.1);
+		--tint-bg-strong: rgba(255, 62, 0, 0.16);
+		--mix-light: #262633;
+		--mix-dark: #f0f0f2;
+	}
+
 	:global(body) {
-		background: linear-gradient(180deg, #fff7f4 0%, #f4f6fb 100%);
+		background: linear-gradient(180deg, var(--page-bg-start) 0%, var(--page-bg-end) 100%);
 		background-attachment: fixed;
+		color: var(--text-primary);
 	}
 
 	main {
@@ -719,13 +953,13 @@
 	}
 
 	.tagline {
-		color: #777;
+		color: var(--text-muted);
 		margin: 0 0 2rem;
 		font-size: 1rem;
 	}
 
 	.card {
-		background: white;
+		background: var(--card-bg);
 		border-radius: 16px;
 		box-shadow:
 			0 1px 2px rgba(20, 20, 30, 0.04),
@@ -740,7 +974,7 @@
 
 	.card.drag-active {
 		border-color: #ff3e00;
-		background: #fff7f4;
+		background: var(--tint-bg);
 	}
 
 	main > section:first-of-type {
@@ -750,7 +984,7 @@
 	.choose-video {
 		display: inline-block;
 		padding: 0.6rem 1.25rem;
-		border: 1px solid #ddd;
+		border: 1px solid var(--border-color);
 		border-radius: 999px;
 		cursor: pointer;
 		margin-bottom: 1rem;
@@ -762,7 +996,7 @@
 
 	.choose-video:hover {
 		border-color: #ff3e00;
-		background: #fff7f4;
+		background: var(--tint-bg);
 	}
 
 	.choose-video input[type='file'] {
@@ -771,7 +1005,7 @@
 
 	.selected-file {
 		margin: 1rem 0;
-		color: #555;
+		color: var(--text-secondary);
 	}
 
 	.or-divider {
@@ -782,13 +1016,21 @@
 		letter-spacing: 0.08em;
 	}
 
+	.url-row {
+		display: flex;
+		align-items: flex-start;
+		gap: 0.6rem;
+		margin-bottom: 1.25rem;
+	}
+
 	.url-input {
+		flex: 1;
+		min-width: 0;
 		width: 100%;
 		box-sizing: border-box;
 		padding: 0.75rem 1rem;
-		border: 1px solid #ddd;
+		border: 1px solid var(--border-color);
 		border-radius: 10px;
-		margin-bottom: 1.25rem;
 		font-size: 0.95rem;
 		transition:
 			border-color 0.15s,
@@ -826,14 +1068,14 @@
 	}
 
 	button:disabled {
-		background: #ddd;
-		color: #999;
+		background: var(--border-color);
+		color: var(--text-faint);
 		cursor: not-allowed;
 	}
 
 	.status {
 		margin-top: 1.25rem;
-		color: #555;
+		color: var(--text-secondary);
 		display: flex;
 		align-items: center;
 		justify-content: center;
@@ -869,9 +1111,9 @@
 
 	.intro {
 		font-size: 1.05rem;
-		color: #333;
+		color: var(--text-primary);
 		line-height: 1.6;
-		background: linear-gradient(120deg, #fff0eb 0%, #eef2ff 100%);
+		background: var(--tint-bg-strong);
 		border-left: 4px solid #ff3e00;
 		border-radius: 10px;
 		padding: 1rem 1.25rem;
@@ -887,9 +1129,9 @@
 	}
 
 	.key-points li {
-		color: #333;
+		color: var(--text-primary);
 		line-height: 1.5;
-		background: #fafafa;
+		background: var(--surface);
 		border-left: 4px solid var(--kp-color);
 		border-radius: 8px;
 		padding: 0.55rem 0.85rem;
@@ -924,7 +1166,7 @@
 	}
 
 	.explanation {
-		color: #333;
+		color: var(--text-primary);
 	}
 
 	.example {
@@ -932,7 +1174,7 @@
 		align-items: flex-start;
 		justify-content: space-between;
 		gap: 0.75rem;
-		background: #f7f7f7;
+		background: var(--surface);
 		border-radius: 8px;
 		padding: 0.6rem 0.85rem;
 		line-height: 1.5;
@@ -948,14 +1190,14 @@
 		font-size: 0.75rem;
 		padding: 0.25rem 0.6rem;
 		border-radius: 6px;
-		border: 1px solid #ddd;
-		background: white;
-		color: #666;
+		border: 1px solid var(--border-color);
+		background: var(--card-bg);
+		color: var(--text-secondary);
 		cursor: pointer;
 	}
 
 	.copy-btn:hover {
-		background: #eee;
+		background: var(--surface-hover);
 	}
 
 	.roadmap {
@@ -980,7 +1222,7 @@
 		top: 2rem;
 		bottom: 0;
 		width: 2px;
-		background: linear-gradient(180deg, #ffcbb3, #ddd 80%);
+		background: linear-gradient(180deg, #ffcbb3, var(--border-color) 80%);
 	}
 
 	.node-marker {
@@ -1013,7 +1255,7 @@
 	}
 
 	.roadmap-hint {
-		color: #999;
+		color: var(--text-faint);
 		font-size: 0.85rem;
 		margin: 0.25rem 0 1rem;
 	}
@@ -1042,9 +1284,9 @@
 	}
 
 	.node-box.main {
-		background: color-mix(in srgb, var(--heading-color, #ff3e00) 12%, white);
+		background: color-mix(in srgb, var(--heading-color, #ff3e00) 12%, var(--mix-light));
 		border: 1px solid var(--heading-color, #ff3e00);
-		color: color-mix(in srgb, var(--heading-color, #ff3e00) 75%, black);
+		color: color-mix(in srgb, var(--heading-color, #ff3e00) 75%, var(--mix-dark));
 	}
 
 	.roadmap-node:nth-child(5n + 1) {
@@ -1068,9 +1310,9 @@
 	}
 
 	.node-box.sub {
-		background: color-mix(in srgb, var(--sub-color, #8b5cf6) 10%, white);
+		background: color-mix(in srgb, var(--sub-color, #8b5cf6) 10%, var(--mix-light));
 		border: 1px solid var(--sub-color, #8b5cf6);
-		color: color-mix(in srgb, var(--sub-color, #8b5cf6) 75%, black);
+		color: color-mix(in srgb, var(--sub-color, #8b5cf6) 75%, var(--mix-dark));
 		font-size: 0.9rem;
 	}
 
@@ -1098,7 +1340,7 @@
 		position: relative;
 		margin-bottom: 0.75rem;
 		background: #fcfcfd;
-		border: 1px solid #eee;
+		border: 1px solid var(--border-soft);
 		border-radius: 12px;
 		padding: 2.5rem 1.25rem 1rem;
 	}
@@ -1112,15 +1354,15 @@
 	}
 
 	.related-label {
-		color: #888;
+		color: var(--text-muted);
 		font-size: 0.85rem;
 	}
 
 	.related-link {
 		font-family: inherit;
 		font-size: 0.8rem;
-		background: #f0f0f0;
-		border: 1px solid #ddd;
+		background: var(--surface-alt);
+		border: 1px solid var(--border-color);
 		border-radius: 999px;
 		padding: 0.2rem 0.7rem;
 		cursor: pointer;
@@ -1128,14 +1370,14 @@
 	}
 
 	.related-link:hover {
-		background: #e6e6e6;
+		background: var(--surface-hover);
 	}
 
 	.branches {
 		margin-top: 1rem;
 		margin-left: 1rem;
 		padding-left: 1rem;
-		border-left: 2px dashed #ccc;
+		border-left: 2px dashed var(--border-color);
 		display: flex;
 		flex-direction: column;
 		gap: 1rem;
@@ -1151,16 +1393,16 @@
 		line-height: 1;
 		padding: 0;
 		border-radius: 50%;
-		border: 1px solid #ddd;
-		background: white;
-		color: #888;
+		border: 1px solid var(--border-color);
+		background: var(--card-bg);
+		color: var(--text-muted);
 		font-size: 1.1rem;
 		cursor: pointer;
 	}
 
 	.close-topic-btn:hover {
-		background: #f5f5f5;
-		color: #333;
+		background: var(--surface-hover);
+		color: var(--text-primary);
 	}
 
 	.ai-actions {
@@ -1172,7 +1414,7 @@
 
 	.ai-actions-label {
 		font-size: 0.8rem;
-		color: #888;
+		color: var(--text-muted);
 		text-transform: uppercase;
 		letter-spacing: 0.03em;
 	}
@@ -1183,17 +1425,17 @@
 		padding: 0.3rem 0.8rem;
 		border-radius: 6px;
 		border: 1px solid #ff3e00;
-		background: white;
+		background: var(--card-bg);
 		color: #ff3e00;
 		cursor: pointer;
 	}
 
 	.ai-action-btn:hover {
-		background: #fff0eb;
+		background: var(--tint-bg-strong);
 	}
 
 	.ai-loading {
-		color: #999;
+		color: var(--text-faint);
 		font-size: 0.9rem;
 		font-style: italic;
 		margin-top: 0.5rem;
@@ -1208,8 +1450,8 @@
 	.ai-panel {
 		position: relative;
 		margin-top: 0.75rem;
-		background: #fafafa;
-		border: 1px solid #eee;
+		background: var(--surface);
+		border: 1px solid var(--border-soft);
 		border-radius: 8px;
 		padding: 0.75rem 2.25rem 0.75rem 1rem;
 	}
@@ -1224,16 +1466,16 @@
 		line-height: 1;
 		padding: 0;
 		border-radius: 50%;
-		border: 1px solid #ddd;
-		background: white;
-		color: #888;
+		border: 1px solid var(--border-color);
+		background: var(--card-bg);
+		color: var(--text-muted);
 		font-size: 1rem;
 		cursor: pointer;
 	}
 
 	.ai-panel-close:hover {
-		background: #eee;
-		color: #333;
+		background: var(--surface-hover);
+		color: var(--text-primary);
 	}
 
 	.ai-panel strong {
@@ -1241,13 +1483,13 @@
 		font-size: 0.8rem;
 		text-transform: uppercase;
 		letter-spacing: 0.03em;
-		color: #888;
+		color: var(--text-muted);
 		margin-bottom: 0.4rem;
 	}
 
 	.ai-panel-hint {
 		font-size: 0.75rem;
-		color: #999;
+		color: var(--text-faint);
 		margin: 0 0 0.6rem;
 	}
 
@@ -1271,9 +1513,9 @@
 		text-align: left;
 		padding: 0.55rem 0.75rem;
 		border-radius: 8px;
-		border: 1px solid #eee;
-		background: white;
-		color: #333;
+		border: 1px solid var(--border-soft);
+		background: var(--card-bg);
+		color: var(--text-primary);
 		cursor: pointer;
 		transition:
 			background 0.12s,
@@ -1281,13 +1523,13 @@
 	}
 
 	.explain-point-toggle:hover {
-		background: #fafafa;
-		border-color: #ddd;
+		background: var(--surface);
+		border-color: var(--border-color);
 	}
 
 	.explain-point-toggle.open {
 		border-color: #ff3e00;
-		background: #fff7f4;
+		background: var(--tint-bg);
 	}
 
 	.explain-point-chevron {
@@ -1305,9 +1547,9 @@
 		margin: 0.35rem 0 0;
 		padding: 0.6rem 0.85rem;
 		font-size: 0.88rem;
-		color: #555;
+		color: var(--text-secondary);
 		line-height: 1.5;
-		background: #fafafa;
+		background: var(--surface);
 		border-radius: 8px;
 	}
 
@@ -1324,14 +1566,14 @@
 		font-size: 0.9rem;
 		padding: 0.5rem 0.75rem;
 		border-radius: 6px;
-		border: 1px solid #ddd;
-		background: white;
-		color: #333;
+		border: 1px solid var(--border-color);
+		background: var(--card-bg);
+		color: var(--text-primary);
 		cursor: pointer;
 	}
 
 	.quiz-option:hover:not(:disabled) {
-		background: #f5f5f5;
+		background: var(--surface-hover);
 	}
 
 	.quiz-option:disabled {
@@ -1353,12 +1595,12 @@
 	.quiz-explanation {
 		margin-top: 0.6rem;
 		font-size: 0.9rem;
-		color: #555;
+		color: var(--text-secondary);
 	}
 
 	.quiz-question {
 		font-size: 0.95rem;
-		color: #333;
+		color: var(--text-primary);
 	}
 
 	.quiz-code {
@@ -1387,7 +1629,7 @@
 
 	.quiz-progress {
 		font-size: 0.75rem;
-		color: #999;
+		color: var(--text-faint);
 		text-transform: none;
 		letter-spacing: normal;
 	}
@@ -1417,8 +1659,8 @@
 
 	.resources {
 		margin-top: 1rem;
-		background: #fafafa;
-		border: 1px solid #eee;
+		background: var(--surface);
+		border: 1px solid var(--border-soft);
 		border-radius: 8px;
 		padding: 0.75rem 1rem;
 	}
@@ -1428,7 +1670,7 @@
 		font-size: 0.8rem;
 		text-transform: uppercase;
 		letter-spacing: 0.03em;
-		color: #888;
+		color: var(--text-muted);
 		margin-bottom: 0.5rem;
 	}
 
@@ -1449,7 +1691,7 @@
 	.overall-quiz-section {
 		margin-top: 2.5rem;
 		padding-top: 1.75rem;
-		border-top: 2px dashed #eee;
+		border-top: 2px dashed var(--border-soft);
 		text-align: center;
 	}
 
@@ -1462,6 +1704,146 @@
 		width: 100%;
 		margin: 0.75rem auto 0;
 		text-align: left;
+	}
+
+	/* --- Dark mode toggle --- */
+	.theme-toggle {
+		position: fixed;
+		top: 1.25rem;
+		right: 1.25rem;
+		width: 2.5rem;
+		height: 2.5rem;
+		padding: 0;
+		border-radius: 50%;
+		background: var(--card-bg);
+		border: 1px solid var(--border-color);
+		font-size: 1.15rem;
+		line-height: 1;
+		box-shadow: 0 2px 8px rgba(20, 20, 30, 0.1);
+		z-index: 10;
+	}
+
+	.theme-toggle:hover:not(:disabled) {
+		transform: none;
+		box-shadow: 0 2px 10px rgba(20, 20, 30, 0.16);
+	}
+
+	/* --- Output language select --- */
+	.language-select-label {
+		flex: 0 0 auto;
+		display: block;
+		text-align: left;
+		font-size: 0.7rem;
+		color: var(--text-muted);
+		white-space: nowrap;
+	}
+
+	.language-select {
+		display: block;
+		margin-top: 0.3rem;
+		padding: 0.4rem 0.5rem;
+		border-radius: 8px;
+		border: 1px solid var(--border-color);
+		background: var(--card-bg);
+		color: var(--text-primary);
+		font-size: 0.78rem;
+		font-family: inherit;
+		box-sizing: border-box;
+	}
+
+	/* --- Detected language badge --- */
+	.language-badge {
+		display: inline-block;
+		font-size: 0.75rem;
+		color: var(--text-muted);
+		background: var(--surface);
+		border: 1px solid var(--border-soft);
+		border-radius: 999px;
+		padding: 0.2rem 0.7rem;
+		margin-bottom: 0.75rem;
+	}
+
+	/* --- Progress bar --- */
+	.progress-wrap {
+		margin: 1rem 0;
+	}
+
+	.progress-label {
+		display: flex;
+		justify-content: space-between;
+		font-size: 0.8rem;
+		color: var(--text-muted);
+		margin-bottom: 0.35rem;
+	}
+
+	.progress-bar {
+		height: 0.5rem;
+		border-radius: 999px;
+		background: var(--surface-hover);
+		overflow: hidden;
+	}
+
+	.progress-fill {
+		height: 100%;
+		background: linear-gradient(90deg, #ff3e00, #b45cd6);
+		border-radius: 999px;
+		transition: width 0.2s;
+	}
+
+	/* --- Topic search --- */
+	.topic-search {
+		width: 100%;
+		box-sizing: border-box;
+		padding: 0.6rem 0.9rem;
+		border: 1px solid var(--border-color);
+		border-radius: 10px;
+		background: var(--card-bg);
+		color: var(--text-primary);
+		font-size: 0.9rem;
+		font-family: inherit;
+		margin: 0.5rem 0 1rem;
+	}
+
+	/* --- Mark topic as done --- */
+	.done-checkbox {
+		display: inline-flex;
+		align-items: center;
+		gap: 0.4rem;
+		font-size: 0.8rem;
+		color: var(--text-secondary);
+		margin-bottom: 0.75rem;
+		cursor: pointer;
+	}
+
+	.done-checkbox input {
+		cursor: pointer;
+	}
+
+	/* --- Quiz difficulty badge --- */
+	.difficulty-badge {
+		display: inline-block;
+		font-size: 0.7rem;
+		font-weight: 600;
+		text-transform: uppercase;
+		letter-spacing: 0.03em;
+		padding: 0.15rem 0.55rem;
+		border-radius: 999px;
+		margin: 0.4rem 0 0.2rem;
+	}
+
+	.difficulty-easy {
+		background: #eaf6ea;
+		color: #2e7d32;
+	}
+
+	.difficulty-medium {
+		background: #fff4e0;
+		color: #b06f00;
+	}
+
+	.difficulty-hard {
+		background: #fdeeea;
+		color: #c53000;
 	}
 
 	@media (max-width: 640px) {
@@ -1479,6 +1861,15 @@
 		.analyze-btn {
 			width: 100%;
 			box-sizing: border-box;
+		}
+
+		.url-row {
+			flex-direction: column;
+			align-items: stretch;
+		}
+
+		.language-select {
+			width: 100%;
 		}
 
 		.analyze-btn {

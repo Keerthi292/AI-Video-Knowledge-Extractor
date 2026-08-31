@@ -21,7 +21,8 @@ def _get_model():
     return whisper.load_model("tiny", device="cpu")
 
 
-def transcribe_audio(audio_path: Path) -> str:
+def transcribe_audio(audio_path: Path) -> tuple[str, str | None]:
+    """Transcribe audio to text, returning (text, detected_language_code)."""
     try:
         model = _get_model()
         result = model.transcribe(str(audio_path))
@@ -30,4 +31,4 @@ def transcribe_audio(audio_path: Path) -> str:
             f"Whisper failed to transcribe {audio_path.name}: {exc}"
         )
 
-    return result["text"].strip()
+    return result["text"].strip(), result.get("language")

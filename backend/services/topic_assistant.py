@@ -51,6 +51,7 @@ QUIZ_QUESTION_PROPERTIES = {
     },
     "answer_index": {"type": "integer"},
     "explanation": {"type": "string"},
+    "difficulty": {"type": "string", "enum": ["easy", "medium", "hard"]},
 }
 
 QUIZ_SCHEMA = {
@@ -61,12 +62,18 @@ QUIZ_SCHEMA = {
             "items": {
                 "type": "object",
                 "properties": QUIZ_QUESTION_PROPERTIES,
-                "required": ["question", "options", "answer_index", "explanation"],
+                "required": ["question", "options", "answer_index", "explanation", "difficulty"],
             },
         },
     },
     "required": ["questions"],
 }
+
+DIFFICULTY_INSTRUCTIONS = """Tag each question with a "difficulty" of "easy", "medium", or "hard"
+(easy = a direct fact from the material, medium = requires connecting two
+things, hard = requires deeper reasoning or a subtle distinction). Order the
+questions from easy to hard, and include at least one of each difficulty
+where the question count allows it."""
 
 CODE_QUESTION_INSTRUCTIONS = """If the topic/example above involves code, syntax, or a command, include at
 least one question that tests it directly — e.g. "what does this code
@@ -95,7 +102,7 @@ same question). For each question, provide exactly 4 "options", set
 answerable from the explanation/example above — don't require outside
 knowledge.
 
-""" + CODE_QUESTION_INSTRUCTIONS
+""" + CODE_QUESTION_INSTRUCTIONS + "\n\n" + DIFFICULTY_INSTRUCTIONS
 
 OVERALL_QUIZ_PROMPT = """A learner has gone through an entire learning roadmap generated
 from a video, covering the modules listed below. Test their overall
@@ -113,7 +120,7 @@ For each question, provide exactly 4 "options", set "answer_index" to the
 that answer is correct. Every question must be answerable from the roadmap
 content above — don't require outside knowledge.
 
-""" + CODE_QUESTION_INSTRUCTIONS
+""" + CODE_QUESTION_INSTRUCTIONS + "\n\n" + DIFFICULTY_INSTRUCTIONS
 
 
 class TopicAssistantError(Exception):

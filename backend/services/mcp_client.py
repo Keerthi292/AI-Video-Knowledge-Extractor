@@ -68,8 +68,10 @@ class VideoDetailsMCPClient:
     async def fetch_video_details(self, url: str) -> dict:
         return await self._call("fetch_video_details", {"url": url})
 
-    async def summarize_transcript(self, transcript: str) -> dict:
-        return await self._call("summarize_transcript", {"transcript": transcript})
+    async def summarize_transcript(self, transcript: str, target_language: str | None = None) -> dict:
+        return await self._call(
+            "summarize_transcript", {"transcript": transcript, "target_language": target_language}
+        )
 
     async def explain_topic(self, heading: str, content: str, example: str | None) -> dict:
         return await self._call(
