@@ -38,6 +38,26 @@
 		detail: string;
 	};
 
+	type TextSegment = { type: 'text' | 'code'; content: string };
+
+	function parseCodeSegments(text: string): TextSegment[] {
+		const segments: TextSegment[] = [];
+		const fence = /```[^\n`]*\n?([\s\S]*?)```/g;
+		let lastIndex = 0;
+		let match: RegExpExecArray | null;
+		while ((match = fence.exec(text)) !== null) {
+			if (match.index > lastIndex) {
+				segments.push({ type: 'text', content: text.slice(lastIndex, match.index) });
+			}
+			segments.push({ type: 'code', content: match[1].replace(/\n$/, '') });
+			lastIndex = fence.lastIndex;
+		}
+		if (lastIndex < text.length) {
+			segments.push({ type: 'text', content: text.slice(lastIndex) });
+		}
+		return segments;
+	}
+
 	const API_BASE = 'http://localhost:8000';
 	const API_URL = `${API_BASE}/api/analyze`;
 
@@ -391,6 +411,16 @@
 				{/each}
 			</ul>
 
+			{#snippet quizText(text: string)}
+				{#each parseCodeSegments(text) as segment}
+					{#if segment.type === 'code'}
+						<pre class="quiz-code"><code>{segment.content}</code></pre>
+					{:else if segment.content.trim()}
+						<span>{segment.content}</span>
+					{/if}
+				{/each}
+			{/snippet}
+
 			{#snippet topicDetails(topic: Topic)}
 				{#if expandedTopics.has(topic.heading)}
 					<div class="node-details" transition:slide={{ duration: 200 }}>
@@ -477,7 +507,7 @@
 									<strong>Quiz</strong>
 									<span class="quiz-progress">Question {qIndex + 1} of {questions.length}</span>
 								</div>
-								<p>{question.question}</p>
+								<div class="quiz-question">{@render quizText(question.question)}</div>
 								<div class="quiz-options">
 									{#each question.options as option, idx}
 										<button
@@ -487,12 +517,12 @@
 											disabled={selected !== undefined}
 											onclick={() => selectQuizOption(topic.heading, qIndex, idx)}
 										>
-											{option}
+											{@render quizText(option)}
 										</button>
 									{/each}
 								</div>
 								{#if selected !== undefined}
-									<p class="quiz-explanation">{question.explanation}</p>
+									<div class="quiz-explanation">{@render quizText(question.explanation)}</div>
 									{#if qIndex + 1 < questions.length}
 										<button class="quiz-next-btn" onclick={() => nextQuizQuestion(topic.heading)}>
 											Next question →
@@ -602,7 +632,7 @@
 								Question {overallQuizIndex + 1} of {overallQuiz.length}
 							</span>
 						</div>
-						<p>{question.question}</p>
+						<div class="quiz-question">{@render quizText(question.question)}</div>
 						<div class="quiz-options">
 							{#each question.options as option, idx}
 								<button
@@ -612,12 +642,12 @@
 									disabled={selected !== undefined}
 									onclick={() => selectOverallOption(overallQuizIndex, idx)}
 								>
-									{option}
+									{@render quizText(option)}
 								</button>
 							{/each}
 						</div>
 						{#if selected !== undefined}
-							<p class="quiz-explanation">{question.explanation}</p>
+							<div class="quiz-explanation">{@render quizText(question.explanation)}</div>
 							{#if overallQuizIndex + 1 < overallQuiz.length}
 								<button class="quiz-next-btn" onclick={nextOverallQuestion}>
 									Next question →
@@ -1324,6 +1354,28 @@
 		margin-top: 0.6rem;
 		font-size: 0.9rem;
 		color: #555;
+	}
+
+	.quiz-question {
+		font-size: 0.95rem;
+		color: #333;
+	}
+
+	.quiz-code {
+		margin: 0.4rem 0;
+		padding: 0.6rem 0.75rem;
+		background: #1e1e2e;
+		color: #f2f2f2;
+		border-radius: 6px;
+		font-family: ui-monospace, 'SFMono-Regular', Menlo, Consolas, monospace;
+		font-size: 0.82rem;
+		line-height: 1.5;
+		overflow-x: auto;
+		white-space: pre;
+	}
+
+	.quiz-option .quiz-code {
+		margin: 0.3rem 0 0;
 	}
 
 	.quiz-header {

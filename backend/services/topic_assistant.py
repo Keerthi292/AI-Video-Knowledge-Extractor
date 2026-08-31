@@ -68,6 +68,18 @@ QUIZ_SCHEMA = {
     "required": ["questions"],
 }
 
+CODE_QUESTION_INSTRUCTIONS = """If the topic/example above involves code, syntax, or a command, include at
+least one question that tests it directly — e.g. "what does this code
+output", "what's wrong with this snippet", "which option correctly does X".
+Reuse the actual code from the example (or a small variant of it) rather than
+describing code in prose. Put any code in the "question" text and/or
+"options" as a fenced block using triple backticks, e.g.:
+```python
+print(1 + 1)
+```
+preserving exact syntax and indentation. Only do this when the topic is
+actually about code — don't force code into questions on non-code topics."""
+
 QUIZ_PROMPT = """A learner is studying this topic from a video roadmap and wants to
 test their understanding.
 
@@ -75,14 +87,15 @@ Topic: {heading}
 Explanation: {content}
 Example: {example}
 
-Write 4 to 5 multiple-choice quiz questions testing understanding of this
+Write exactly 5 multiple-choice quiz questions testing understanding of this
 specific topic, covering different aspects of it (don't just rephrase the
 same question). For each question, provide exactly 4 "options", set
 "answer_index" to the 0-based index of the correct option, and give a short
 "explanation" of why that answer is correct. Every question must be
 answerable from the explanation/example above — don't require outside
 knowledge.
-"""
+
+""" + CODE_QUESTION_INSTRUCTIONS
 
 OVERALL_QUIZ_PROMPT = """A learner has gone through an entire learning roadmap generated
 from a video, covering the modules listed below. Test their overall
@@ -99,7 +112,8 @@ For each question, provide exactly 4 "options", set "answer_index" to the
 0-based index of the correct option, and give a short "explanation" of why
 that answer is correct. Every question must be answerable from the roadmap
 content above — don't require outside knowledge.
-"""
+
+""" + CODE_QUESTION_INSTRUCTIONS
 
 
 class TopicAssistantError(Exception):
@@ -174,7 +188,9 @@ def _generate_quiz(prompt: str) -> list[dict]:
 
 def quiz_topic(heading: str, content: str, example: str | None) -> list[dict]:
     prompt = QUIZ_PROMPT.format(heading=heading, content=content, example=example or "(none given)")
-    return _generate_quiz(prompt)
+    # Gemini is asked for exactly 5, but structured output isn't a hard
+    # guarantee — cap here so the quiz never runs longer than requested.
+    return _generate_quiz(prompt)[:5]
 
 
 def _flatten_roadmap(roadmap: list[dict]) -> str:

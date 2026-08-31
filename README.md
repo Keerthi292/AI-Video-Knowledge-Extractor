@@ -49,7 +49,7 @@ flowchart TD
 4. The transcript goes to the `summarize_transcript` MCP tool (Gemini), which returns an `intro`, `key_points`, and a `roadmap` tree of topics/sub-topics, each with an in-depth explanation and a concrete example pulled from the transcript.
 5. Each roadmap topic's placeholder resources are replaced with real YouTube videos via a `yt-dlp` search sorted by upload date (most recent first).
 6. The full analysis is saved to disk as JSON and returned to the frontend, which renders the intro, key points, and an interactive roadmap.
-7. From there the user can, per topic, click **Explain** (`explain_topic` MCP tool) for a deeper AI breakdown, or **Quiz me** (`quiz_topic` MCP tool) for a short quiz on just that topic.
+7. From there the user can, per topic, click **Explain** (`explain_topic` MCP tool) for a deeper AI breakdown, or **Quiz me** (`quiz_topic` MCP tool) for a 5-question quiz on just that topic — testing actual code from the example when the topic involves code.
 8. Once done with the roadmap, **Take Full Quiz** calls the `quiz_overall` MCP tool, which generates 10-15 questions spread across every module in the roadmap, then shows a final score with an option to retake.
 
 ### Sequence Diagram
@@ -97,8 +97,9 @@ sequenceDiagram
 - AI-generated intro, key points, and a topic roadmap (with sub-topics and concrete examples from the transcript)
 - Real, recently-uploaded related YouTube videos suggested per topic
 - **Explain**: an on-demand, deeper AI explanation for any topic
-- **Quiz me**: a short multiple-choice quiz for a single topic
+- **Quiz me**: a 5-question multiple-choice quiz for a single topic
 - **Final Quiz**: a longer (10-15 question) multiple-choice quiz covering the whole roadmap, with scoring and retake
+- Quiz questions test actual code from the video's examples where relevant (output prediction, spot-the-bug, etc.), rendered with proper code formatting
 
 ## Project Structure
 
