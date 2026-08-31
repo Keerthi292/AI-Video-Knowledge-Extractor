@@ -22,34 +22,10 @@ Either way, the resulting transcript is sent to Gemini, which returns an intro, 
 ## Flow
 
 ```mermaid
-flowchart TD
-    A[User: upload file OR paste video URL] --> B{Which input?}
-
-    B -- "Video URL" --> C["MCP tool: fetch_video_details<br/>(yt-dlp reads captions, no download)"]
-    C --> D{Captions available?}
-    D -- yes --> E[Transcript from captions]
-    D -- no --> F["yt-dlp: download audio only"]
-    F --> G["Whisper: transcribe audio"]
-    G --> E
-
-    B -- "Video file" --> H["FFmpeg: extract audio (wav 16kHz mono)"]
-    H --> I["Whisper: transcribe audio"]
-    I --> E
-
-    E --> J["MCP tool: summarize_transcript (Gemini)<br/>intro + key_points + roadmap tree"]
-    J --> K["Enrich: yt-dlp search per topic<br/>(sorted by upload date)"]
-    K --> L[Save analysis JSON to disk]
-    L --> M[SvelteKit renders intro, key points, roadmap]
-
-    M --> N{User action on a topic}
-    N -- "Explain" --> O["MCP tool: explain_topic (Gemini)<br/>4-6 deeper points"]
-    N -- "Quiz me" --> P["MCP tool: quiz_topic (Gemini)<br/>4-5 questions on that topic"]
-    M --> Q["Final Quiz button"]
-    Q --> R["MCP tool: quiz_overall (Gemini)<br/>10-15 questions across the whole roadmap"]
-
-    O --> M
-    P --> M
-    R --> M
+flowchart LR
+    A[Upload / URL] --> B[Transcript<br/>captions or Whisper]
+    B --> C[Gemini: Roadmap<br/>intro + key points + topics]
+    C --> D[Explain / Quiz / Final Quiz]
 ```
 
 1. The user uploads a video file or pastes a video URL in the SvelteKit UI and clicks **Analyze Video**.
@@ -70,66 +46,23 @@ sequenceDiagram
     actor User
     participant UI as SvelteKit
     participant API as FastAPI
-    participant MCP as MCP Tool Server
-    participant YT as yt-dlp
-    participant W as Whisper / FFmpeg
+    participant MCP as MCP Tools
     participant G as Gemini
 
-    User->>UI: Upload file or paste URL, click "Analyze Video"
+    User->>UI: Upload / paste URL
     UI->>API: POST /api/analyze
+    API->>API: Get transcript (captions / Whisper)
+    API->>MCP: summarize_transcript
+    MCP->>G: generate roadmap
+    G-->>API: intro + key points + roadmap
+    API-->>UI: render roadmap
 
-    alt Video URL
-        API->>MCP: fetch_video_details(url)
-        MCP->>YT: read captions/metadata (no download)
-        alt captions available
-            YT-->>MCP: transcript
-        else no captions
-            YT-->>API: audio-only download
-            API->>W: extract_audio + transcribe_audio
-            W-->>API: transcript
-        end
-    else Video file
-        API->>W: extract_audio (FFmpeg) + transcribe_audio (Whisper)
-        W-->>API: transcript
-    end
-
-    API->>MCP: summarize_transcript(transcript)
-    MCP->>G: generate roadmap (intro, key_points, roadmap)
-    G-->>MCP: structured JSON
-    MCP-->>API: intro + key_points + roadmap
-
-    API->>YT: search related videos per topic (sorted by upload date)
-    YT-->>API: real YouTube links
-    API->>API: save analysis JSON to disk
-    API-->>UI: intro + key_points + roadmap
-    UI-->>User: render roadmap
-
-    User->>UI: Click "Explain" on a topic
-    UI->>API: POST /api/topic/explain
-    API->>MCP: explain_topic(heading, content, example)
-    MCP->>G: generate deeper explanation
-    G-->>MCP: points
-    MCP-->>API: points
-    API-->>UI: points
-    UI-->>User: show explanation panel
-
-    User->>UI: Click "Quiz me" on a topic
-    UI->>API: POST /api/topic/quiz
-    API->>MCP: quiz_topic(heading, content, example)
-    MCP->>G: generate 4-5 questions
-    G-->>MCP: questions
-    MCP-->>API: questions
-    API-->>UI: questions
-    UI-->>User: interactive quiz
-
-    User->>UI: Click "Take Full Quiz"
-    UI->>API: POST /api/quiz/overall
-    API->>MCP: quiz_overall(roadmap)
-    MCP->>G: generate 10-15 questions across all modules
-    G-->>MCP: questions
-    MCP-->>API: questions
-    API-->>UI: questions
-    UI-->>User: full quiz + final score
+    User->>UI: Explain / Quiz me / Final Quiz
+    UI->>API: POST /api/topic/... or /api/quiz/overall
+    API->>MCP: explain_topic / quiz_topic / quiz_overall
+    MCP->>G: generate response
+    G-->>API: points / questions
+    API-->>UI: show panel or quiz
 ```
 
 ## Why Each Technology
