@@ -1,4 +1,6 @@
+
 <script lang="ts">
+import { API_BASE } from '$lib/api';
 	import { onMount } from 'svelte';
 	import { SvelteSet, SvelteMap } from 'svelte/reactivity';
 	import { slide } from 'svelte/transition';
@@ -86,7 +88,7 @@
 		return segments;
 	}
 
-	const API_BASE = 'http://localhost:8000';
+	// const API_BASE = 'http://localhost:8000';
 
 	type HistoryEntry = { id: number; source: string; intro: string; created_at: string };
 
