@@ -12,7 +12,7 @@ load_dotenv()
 
 from services import db
 from services.audio_extractor import AudioExtractionError, extract_audio
-from services.downloader import VideoDownloadError, download_audio
+from services.downloader import YTDLP_COOKIES_FILE, VideoDownloadError, download_audio
 from services.mcp_client import MCPToolError, VideoDetailsMCPClient
 from services.transcriber import TranscriptionError, transcribe_audio
 from services.video_search import search_youtube_videos
@@ -142,6 +142,18 @@ class DoneTopicsRequest(BaseModel):
 @app.get("/api/health")
 def health_check():
     return {"status": "ok"}
+
+
+@app.get("/api/health/ytdlp-cookies")
+def ytdlp_cookies_status():
+    """Reports whether YTDLP_COOKIES_FILE is configured and actually points
+    at a file, without exposing its path or contents - just enough to debug
+    a misconfigured Render secret file from the browser."""
+    configured = bool(YTDLP_COOKIES_FILE)
+    return {
+        "configured": configured,
+        "file_found": configured and Path(YTDLP_COOKIES_FILE).is_file(),
+    }
 
 
 @app.post("/api/auth/signup")
