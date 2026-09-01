@@ -5,6 +5,7 @@ openai-whisper
 google-genai
 python-dotenv
 yt-dlp
+openai-whisper
 requests
 mcp[cli]
 httpx
