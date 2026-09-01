@@ -94,19 +94,19 @@ async def _transcribe_url_via_audio(url: str) -> tuple[str, str | None]:
     """Fallback for URLs with no usable captions: download just the audio
     and transcribe it locally with Whisper. Returns (transcript, language)."""
     try:
-        raw_audio_path = download_audio(url, UPLOAD_DIR)
+        raw_audio_path = await asyncio.to_thread(download_audio, url, UPLOAD_DIR)
     except VideoDownloadError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
 
     wav_path: Path | None = None
     try:
         try:
-            wav_path = extract_audio(raw_audio_path)
+            wav_path = await asyncio.to_thread(extract_audio, raw_audio_path)
         except AudioExtractionError as exc:
             raise HTTPException(status_code=500, detail=str(exc))
 
         try:
-            return transcribe_audio(wav_path)
+            return await asyncio.to_thread(transcribe_audio, wav_path)
         except TranscriptionError as exc:
             raise HTTPException(status_code=500, detail=str(exc))
     finally:
@@ -307,12 +307,12 @@ async def analyze_video(
 
     try:
         try:
-            audio_path = extract_audio(temp_path)
+            audio_path = await asyncio.to_thread(extract_audio, temp_path)
         except AudioExtractionError as exc:
             raise HTTPException(status_code=500, detail=str(exc))
 
         try:
-            transcript, detected_language = transcribe_audio(audio_path)
+            transcript, detected_language = await asyncio.to_thread(transcribe_audio, audio_path)
         except TranscriptionError as exc:
             raise HTTPException(status_code=500, detail=str(exc))
 
