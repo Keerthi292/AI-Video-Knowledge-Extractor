@@ -133,8 +133,9 @@ import { auth } from '$lib/auth.svelte';
 	let doneTopics = new SvelteSet<string>();
 
 	function doneTopicsKey(): string | null {
-		if (!auth.email || !result?.source) return null;
-		return `done-topics:${auth.email}:${result.source}`;
+		const account = auth.email ?? auth.token;
+		if (!account || !result?.source) return null;
+		return `done-topics:${account}:${result.source}`;
 	}
 
 	function loadDoneTopics() {

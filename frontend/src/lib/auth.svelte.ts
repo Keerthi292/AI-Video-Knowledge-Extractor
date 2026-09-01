@@ -4,6 +4,7 @@ import { API_BASE } from './api';
 class AuthStore {
 	token: string | null = $state(null);
 	email: string | null = $state(null);
+	isGuest = $state(false);
 	checked = $state(false);
 	view: 'login' | 'signup' = $state('login');
 	emailInput = $state('');
@@ -24,9 +25,10 @@ class AuthStore {
 		return response;
 	}
 
-	set(token: string, email: string) {
+	set(token: string, email: string | null, isGuest = false) {
 		this.token = token;
 		this.email = email;
+		this.isGuest = isGuest;
 		try {
 			localStorage.setItem('auth-token', token);
 		} catch {
@@ -38,6 +40,7 @@ class AuthStore {
 		const token = this.token;
 		this.token = null;
 		this.email = null;
+		this.isGuest = false;
 		this.emailInput = '';
 		this.passwordInput = '';
 		this.error = null;
@@ -74,6 +77,7 @@ class AuthStore {
 			if (!response.ok) throw new Error('invalid session');
 			const data = await response.json();
 			this.email = data.email;
+			this.isGuest = data.is_guest;
 		} catch {
 			this.token = null;
 			try {
@@ -100,6 +104,21 @@ class AuthStore {
 			if (!response.ok) throw new Error(data.detail ?? 'Authentication failed');
 			this.set(data.token, data.email);
 			this.passwordInput = '';
+		} catch (err) {
+			this.error = err instanceof Error ? err.message : 'Something went wrong';
+		} finally {
+			this.loading = false;
+		}
+	}
+
+	async guestLogin() {
+		this.loading = true;
+		this.error = null;
+		try {
+			const response = await fetch(`${API_BASE}/api/auth/guest`, { method: 'POST' });
+			const data = await response.json();
+			if (!response.ok) throw new Error(data.detail ?? 'Could not start a guest session');
+			this.set(data.token, data.email, data.is_guest);
 		} catch (err) {
 			this.error = err instanceof Error ? err.message : 'Something went wrong';
 		} finally {

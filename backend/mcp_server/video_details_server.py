@@ -102,6 +102,15 @@ def signup(email: str, password: str) -> dict:
 
 
 @mcp.tool()
+def guest_login() -> dict:
+    """Create a throwaway guest account and return a session token for it,
+    for the Skip-login path (no email/password required)."""
+    user_id = db.create_guest_user()
+    token = db.create_session(user_id)
+    return {"token": token, "email": None, "is_guest": True}
+
+
+@mcp.tool()
 def login(email: str, password: str) -> dict:
     """Log in to an existing account and return a session token."""
     try:

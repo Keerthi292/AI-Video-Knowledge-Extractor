@@ -79,10 +79,15 @@
 					{auth.view === 'login' ? 'Sign up' : 'Log in'}
 				</button>
 			</p>
+			<p class="auth-switch">
+				<button class="link-btn" disabled={auth.loading} onclick={() => auth.guestLogin()}>
+					Skip for now
+				</button>
+			</p>
 		</section>
 	{:else}
 		<div class="account-bar">
-			<span class="account-email">{auth.email}</span>
+			<span class="account-email">{auth.isGuest ? 'Guest' : auth.email}</span>
 			<div class="account-bar-actions">
 				{#if onHistoryPage}
 					<a class="ai-action-btn" href="/">Hide history</a>

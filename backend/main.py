@@ -160,6 +160,11 @@ async def login(body: LoginRequest):
         raise HTTPException(status_code=401, detail=str(exc))
 
 
+@app.post("/api/auth/guest")
+async def guest_login():
+    return await app.state.mcp_client.guest_login()
+
+
 @app.post("/api/auth/logout")
 async def logout(authorization: str | None = Header(default=None)):
     if authorization and authorization.startswith("Bearer "):
@@ -172,7 +177,7 @@ async def logout(authorization: str | None = Header(default=None)):
 
 @app.get("/api/auth/me")
 def me(user: dict = Depends(get_current_user)):
-    return {"email": user["email"]}
+    return {"email": user["email"], "is_guest": user["is_guest"]}
 
 
 @app.get("/api/history")

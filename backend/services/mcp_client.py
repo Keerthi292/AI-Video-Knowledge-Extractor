@@ -92,6 +92,9 @@ class VideoDetailsMCPClient:
     async def login(self, email: str, password: str) -> dict:
         return await self._call("login", {"email": email, "password": password})
 
+    async def guest_login(self) -> dict:
+        return await self._call("guest_login", {})
+
     async def logout(self, token: str) -> dict:
         return await self._call("logout", {"token": token})
 

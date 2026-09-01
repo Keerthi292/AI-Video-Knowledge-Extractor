@@ -47,6 +47,7 @@ def init_db() -> None:
                 email TEXT UNIQUE NOT NULL,
                 password_hash TEXT NOT NULL,
                 password_salt TEXT NOT NULL,
+                is_guest INTEGER NOT NULL DEFAULT 0,
                 created_at TEXT NOT NULL
             )"""
         )
@@ -79,6 +80,12 @@ def init_db() -> None:
         if "done_topics" not in columns:
             cur.execute("ALTER TABLE analyses ADD COLUMN done_topics TEXT NOT NULL DEFAULT '[]'")
 
+        # Migration for databases created before guest accounts existed.
+        cur.execute("PRAGMA table_info(users)")
+        columns = {row["name"] for row in cur.fetchall()}
+        if "is_guest" not in columns:
+            cur.execute("ALTER TABLE users ADD COLUMN is_guest INTEGER NOT NULL DEFAULT 0")
+
 
 def _hash_password(password: str, salt: str) -> str:
     return hashlib.pbkdf2_hmac("sha256", password.encode(), salt.encode(), PBKDF2_ITERATIONS).hex()
@@ -106,6 +113,22 @@ def create_user(email: str, password: str) -> int:
             )
         except sqlite3.IntegrityError:
             raise AuthError("An account with that email already exists")
+        return cur.lastrowid
+
+
+def create_guest_user() -> int:
+    """Create a throwaway account with no password, for Skip-login access.
+    Guests get their own isolated history/done-topics like a real account,
+    just under a generated, unguessable placeholder email."""
+    email = f"guest-{secrets.token_hex(12)}@guest.local"
+    salt = secrets.token_hex(16)
+    password_hash = _hash_password(secrets.token_urlsafe(32), salt)
+
+    with _cursor() as cur:
+        cur.execute(
+            "INSERT INTO users (email, password_hash, password_salt, is_guest, created_at) VALUES (?, ?, ?, 1, ?)",
+            (email, password_hash, salt, _now()),
+        )
         return cur.lastrowid
 
 
@@ -140,7 +163,8 @@ def create_session(user_id: int) -> str:
 def get_user_from_token(token: str) -> dict | None:
     with _cursor() as cur:
         cur.execute(
-            """SELECT users.id AS id, users.email AS email, sessions.expires_at AS expires_at
+            """SELECT users.id AS id, users.email AS email, users.is_guest AS is_guest,
+                      sessions.expires_at AS expires_at
                FROM sessions JOIN users ON users.id = sessions.user_id
                WHERE sessions.token = ?""",
             (token,),
@@ -151,7 +175,7 @@ def get_user_from_token(token: str) -> dict | None:
         return None
     if datetime.fromisoformat(row["expires_at"]) < datetime.now(timezone.utc):
         return None
-    return {"id": row["id"], "email": row["email"]}
+    return {"id": row["id"], "email": row["email"], "is_guest": bool(row["is_guest"])}
 
 
 def delete_session(token: str) -> None:
