@@ -2,7 +2,7 @@ fastapi
 uvicorn[standard]
 gunicorn
 python-multipart
-openai-whisper
+faster-whisper
 google-genai
 python-dotenv
 yt-dlp
