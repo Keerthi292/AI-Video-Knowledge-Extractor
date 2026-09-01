@@ -1,3 +1,4 @@
+import os
 import re
 import time
 import uuid
@@ -10,6 +11,17 @@ CAPTION_FETCH_RETRIES = 3
 CAPTION_FETCH_RETRY_DELAY_SECONDS = 2
 
 PREFERRED_LANGUAGES = ("en", "en-US", "en-GB", "en-orig")
+
+# Path to a Netscape-format cookies file exported from a real, logged-in
+# YouTube session. Cloud-host IPs (Render, AWS, etc.) get hit with YouTube's
+# "Sign in to confirm you're not a bot" wall regardless of player client;
+# authenticated cookies are the only reliable way past it from those IPs.
+# Optional - yt-dlp works cookie-less for hosts YouTube hasn't flagged.
+YTDLP_COOKIES_FILE = os.environ.get("YTDLP_COOKIES_FILE")
+
+
+def _yt_dlp_base_options() -> dict:
+    return {"cookiefile": YTDLP_COOKIES_FILE} if YTDLP_COOKIES_FILE else {}
 
 
 class VideoDownloadError(Exception):
@@ -90,6 +102,7 @@ def get_video_transcript(url: str) -> tuple[str, dict]:
     auto-generated) captions, then downloads just the small caption file.
     """
     options = {
+    **_yt_dlp_base_options(),
     "skip_download": True,
     "quiet": True,
     "no_warnings": True,
@@ -148,6 +161,7 @@ def download_audio(url: str, dest_dir: Path) -> Path:
     output_template = str(dest_dir / f"{uuid.uuid4()}.%(ext)s")
 
     options = {
+    **_yt_dlp_base_options(),
     "format": "bestaudio/best",
     "outtmpl": output_template,
     "quiet": True,
