@@ -3,6 +3,7 @@ import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
 
+import httpx
 from dotenv import load_dotenv
 from fastapi import Depends, FastAPI, UploadFile, File, Form, Header, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -12,7 +13,7 @@ load_dotenv()
 
 from services import db
 from services.audio_extractor import AudioExtractionError, extract_audio
-from services.downloader import YTDLP_COOKIES_FILE, VideoDownloadError, download_audio
+from services.downloader import POT_PROVIDER_BASE_URL, YTDLP_COOKIES_FILE, VideoDownloadError, download_audio
 from services.mcp_client import MCPToolError, VideoDetailsMCPClient
 from services.transcriber import TranscriptionError, transcribe_audio
 from services.video_search import search_youtube_videos
@@ -154,6 +155,23 @@ def ytdlp_cookies_status():
         "configured": configured,
         "file_found": configured and Path(YTDLP_COOKIES_FILE).is_file(),
     }
+
+
+@app.get("/api/health/pot-provider")
+async def pot_provider_status():
+    """Reports whether POT_PROVIDER_BASE_URL is configured and actually
+    reachable from this server, without exposing the URL itself - just
+    enough to debug a misconfigured/unreachable companion service."""
+    configured = bool(POT_PROVIDER_BASE_URL)
+    reachable = False
+    if configured:
+        try:
+            async with httpx.AsyncClient(timeout=5) as client:
+                response = await client.get(f"{POT_PROVIDER_BASE_URL}/ping")
+                reachable = response.status_code == 200
+        except httpx.HTTPError:
+            reachable = False
+    return {"configured": configured, "reachable": reachable}
 
 
 @app.post("/api/auth/signup")

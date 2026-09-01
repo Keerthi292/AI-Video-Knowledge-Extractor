@@ -1,6 +1,8 @@
 import logging
 import os
 import re
+import shutil
+import tempfile
 import time
 import uuid
 from pathlib import Path
@@ -29,11 +31,55 @@ if YTDLP_COOKIES_FILE and not Path(YTDLP_COOKIES_FILE).is_file():
         YTDLP_COOKIES_FILE,
     )
 
+# yt-dlp writes the cookie jar back to disk when it's done (to persist
+# refreshed session tokens), but YTDLP_COOKIES_FILE is typically a
+# read-only mounted secret (e.g. Render Secret Files) - writing there
+# raises an uncaught PermissionError. Work from a writable copy instead.
+_writable_cookies_file: str | None = None
+
+
+def _get_writable_cookies_file() -> str | None:
+    global _writable_cookies_file
+    if not YTDLP_COOKIES_FILE or not Path(YTDLP_COOKIES_FILE).is_file():
+        return None
+    if _writable_cookies_file and Path(_writable_cookies_file).is_file():
+        return _writable_cookies_file
+
+    dest = Path(tempfile.gettempdir()) / "ytdlp-cookies-writable.txt"
+    try:
+        shutil.copyfile(YTDLP_COOKIES_FILE, dest)
+    except OSError as exc:
+        logger.warning("Could not copy YTDLP_COOKIES_FILE to a writable location: %s", exc)
+        return None
+    _writable_cookies_file = str(dest)
+    return _writable_cookies_file
+
+
+# Base URL of a running bgutil-ytdlp-pot-provider HTTP server (see
+# https://github.com/Brainicism/bgutil-ytdlp-pot-provider), which generates
+# PO (proof-of-origin) tokens. Cookies alone get past YouTube's "Sign in to
+# confirm you're not a bot" wall but authenticated sessions still get
+# refused at format-fetch time ("Requested format is not available")
+# without a valid PO token - this is what actually supplies one. Optional;
+# the youtubepot-bgutilhttp plugin defaults to http://127.0.0.1:4416 if
+# unset, which is only reachable when the provider runs as a sidecar on
+# the same host.
+POT_PROVIDER_BASE_URL = os.environ.get("POT_PROVIDER_BASE_URL")
+
 
 def _yt_dlp_base_options() -> dict:
-    if YTDLP_COOKIES_FILE and Path(YTDLP_COOKIES_FILE).is_file():
-        return {"cookiefile": YTDLP_COOKIES_FILE}
-    return {}
+    options: dict = {}
+
+    cookies_path = _get_writable_cookies_file()
+    if cookies_path:
+        options["cookiefile"] = cookies_path
+
+    if POT_PROVIDER_BASE_URL:
+        options.setdefault("extractor_args", {})["youtubepot-bgutilhttp"] = {
+            "base_url": [POT_PROVIDER_BASE_URL]
+        }
+
+    return options
 
 
 class VideoDownloadError(Exception):
