@@ -1,2 +1,4 @@
 .env
 !.env.example
+cookies.txt
+cookies.json
