@@ -465,7 +465,7 @@ import { auth } from '$lib/auth.svelte';
 </script>
 
 	<section
-		class="card"
+		class="card upload-card"
 		class:drag-active={isDraggingFile}
 		role="group"
 		aria-label="Video upload area, drag and drop a file here"
@@ -908,10 +908,13 @@ import { auth } from '$lib/auth.svelte';
 		padding: 2rem;
 		box-sizing: border-box;
 		border: 2px dashed transparent;
-		text-align: center;
 		transition:
 			border-color 0.15s,
 			background 0.15s;
+	}
+
+	.upload-card {
+		text-align: center;
 	}
 
 	.card.drag-active {
