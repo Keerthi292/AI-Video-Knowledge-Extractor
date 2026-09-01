@@ -1,3 +1,4 @@
+import logging
 import os
 import re
 import time
@@ -6,6 +7,8 @@ from pathlib import Path
 
 import requests
 import yt_dlp
+
+logger = logging.getLogger(__name__)
 
 CAPTION_FETCH_RETRIES = 3
 CAPTION_FETCH_RETRY_DELAY_SECONDS = 2
@@ -19,9 +22,18 @@ PREFERRED_LANGUAGES = ("en", "en-US", "en-GB", "en-orig")
 # Optional - yt-dlp works cookie-less for hosts YouTube hasn't flagged.
 YTDLP_COOKIES_FILE = os.environ.get("YTDLP_COOKIES_FILE")
 
+if YTDLP_COOKIES_FILE and not Path(YTDLP_COOKIES_FILE).is_file():
+    logger.warning(
+        "YTDLP_COOKIES_FILE is set to %r but no file exists there - yt-dlp will "
+        "run without cookies, so YouTube's bot-check wall may still block requests.",
+        YTDLP_COOKIES_FILE,
+    )
+
 
 def _yt_dlp_base_options() -> dict:
-    return {"cookiefile": YTDLP_COOKIES_FILE} if YTDLP_COOKIES_FILE else {}
+    if YTDLP_COOKIES_FILE and Path(YTDLP_COOKIES_FILE).is_file():
+        return {"cookiefile": YTDLP_COOKIES_FILE}
+    return {}
 
 
 class VideoDownloadError(Exception):
