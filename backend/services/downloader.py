@@ -90,11 +90,16 @@ def get_video_transcript(url: str) -> tuple[str, dict]:
     auto-generated) captions, then downloads just the small caption file.
     """
     options = {
-        "skip_download": True,
-        "quiet": True,
-        "no_warnings": True,
-        "noplaylist": True,
-    }
+    "skip_download": True,
+    "quiet": True,
+    "no_warnings": True,
+    "noplaylist": True,
+    "extractor_args": {
+        "youtube": {
+            "player_client": ["android", "web"],
+        }
+    },
+}
 
     try:
         with yt_dlp.YoutubeDL(options) as ydl:
@@ -143,13 +148,18 @@ def download_audio(url: str, dest_dir: Path) -> Path:
     output_template = str(dest_dir / f"{uuid.uuid4()}.%(ext)s")
 
     options = {
-        "format": "bestaudio/best",
-        "outtmpl": output_template,
-        "quiet": True,
-        "no_warnings": True,
-        "noplaylist": True,
-        "max_filesize": 500 * 1024 * 1024,
-    }
+    "format": "bestaudio/best",
+    "outtmpl": output_template,
+    "quiet": True,
+    "no_warnings": True,
+    "noplaylist": True,
+    "max_filesize": 500 * 1024 * 1024,
+    "extractor_args": {
+        "youtube": {
+            "player_client": ["android", "web"],
+        }
+    },
+}
 
     try:
         with yt_dlp.YoutubeDL(options) as ydl:

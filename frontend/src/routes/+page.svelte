@@ -88,7 +88,7 @@ import { API_BASE } from '$lib/api';
 		return segments;
 	}
 
-	// const API_BASE = 'http://localhost:8000';
+	// const API_BASE = 'https://ai-video-knowledge-extractor.onrender.com';
 
 	type HistoryEntry = { id: number; source: string; intro: string; created_at: string };
 
