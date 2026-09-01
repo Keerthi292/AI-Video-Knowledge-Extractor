@@ -13,7 +13,7 @@ from mcp_server.video_details_server import HOST, PORT
 BACKEND_DIR = Path(__file__).parent.parent
 SERVER_URL = f"http://{HOST}:{PORT}/mcp"
 
-CONNECT_TIMEOUT_SECONDS = 10
+CONNECT_TIMEOUT_SECONDS = 30
 CONNECT_RETRY_INTERVAL_SECONDS = 0.2
 
 
