@@ -96,7 +96,7 @@ def get_video_transcript(url: str) -> tuple[str, dict]:
     "noplaylist": True,
     "extractor_args": {
         "youtube": {
-            "player_client": ["android", "web"],
+            "player_client": ["ios", "android", "web"],
         }
     },
 }
@@ -156,7 +156,7 @@ def download_audio(url: str, dest_dir: Path) -> Path:
     "max_filesize": 500 * 1024 * 1024,
     "extractor_args": {
         "youtube": {
-            "player_client": ["android", "web"],
+            "player_client": ["ios", "android", "web"],
         }
     },
 }
