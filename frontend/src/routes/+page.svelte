@@ -1,7 +1,6 @@
 
 <script lang="ts">
-import { API_BASE } from '$lib/api';
-	import { onMount } from 'svelte';
+import { auth } from '$lib/auth.svelte';
 	import { SvelteSet, SvelteMap } from 'svelte/reactivity';
 	import { slide } from 'svelte/transition';
 
@@ -88,144 +87,6 @@ import { API_BASE } from '$lib/api';
 		return segments;
 	}
 
-	// const API_BASE = 'https://ai-video-knowledge-extractor.onrender.com';
-
-	type HistoryEntry = { id: number; source: string; intro: string; created_at: string };
-
-	// --- Auth ---
-	let authToken: string | null = $state(null);
-	let userEmail: string | null = $state(null);
-	let authChecked = $state(false);
-	let authView: 'login' | 'signup' = $state('login');
-	let authEmailInput = $state('');
-	let authPasswordInput = $state('');
-	let authError: string | null = $state(null);
-	let authLoading = $state(false);
-
-	function authHeaders(): Record<string, string> {
-		return authToken ? { Authorization: `Bearer ${authToken}` } : {};
-	}
-
-	async function authedFetch(path: string, options: RequestInit = {}) {
-		const response = await fetch(`${API_BASE}${path}`, {
-			...options,
-			headers: { ...(options.headers as Record<string, string>), ...authHeaders() }
-		});
-		if (response.status === 401) logout();
-		return response;
-	}
-
-	function setAuth(token: string, email: string) {
-		authToken = token;
-		userEmail = email;
-		try {
-			localStorage.setItem('auth-token', token);
-		} catch {
-			// ignore
-		}
-	}
-
-	function logout() {
-		const token = authToken;
-		authToken = null;
-		userEmail = null;
-		result = null;
-		historyItems = null;
-		historyOpen = false;
-		uiState = 'IDLE';
-		errorMessage = null;
-		selectedFile = null;
-		videoUrl = '';
-		authEmailInput = '';
-		authPasswordInput = '';
-		authError = null;
-		doneTopics.clear();
-		try {
-			localStorage.removeItem('auth-token');
-		} catch {
-			// ignore
-		}
-		if (token) {
-			fetch(`${API_BASE}/api/auth/logout`, {
-				method: 'POST',
-				headers: { Authorization: `Bearer ${token}` }
-			}).catch(() => {});
-		}
-	}
-
-	async function checkStoredAuth() {
-		let stored: string | null = null;
-		try {
-			stored = localStorage.getItem('auth-token');
-		} catch {
-			// ignore
-		}
-		if (!stored) {
-			authChecked = true;
-			return;
-		}
-		authToken = stored;
-		try {
-			const response = await fetch(`${API_BASE}/api/auth/me`, {
-				headers: { Authorization: `Bearer ${stored}` }
-			});
-			if (!response.ok) throw new Error('invalid session');
-			const data = await response.json();
-			userEmail = data.email;
-		} catch {
-			authToken = null;
-			try {
-				localStorage.removeItem('auth-token');
-			} catch {
-				// ignore
-			}
-		} finally {
-			authChecked = true;
-		}
-	}
-
-	async function submitAuth() {
-		authLoading = true;
-		authError = null;
-		try {
-			const path = authView === 'login' ? '/api/auth/login' : '/api/auth/signup';
-			const response = await fetch(`${API_BASE}${path}`, {
-				method: 'POST',
-				headers: { 'Content-Type': 'application/json' },
-				body: JSON.stringify({ email: authEmailInput, password: authPasswordInput })
-			});
-			const data = await response.json();
-			if (!response.ok) throw new Error(data.detail ?? 'Authentication failed');
-			setAuth(data.token, data.email);
-			authPasswordInput = '';
-		} catch (err) {
-			authError = err instanceof Error ? err.message : 'Something went wrong';
-		} finally {
-			authLoading = false;
-		}
-	}
-
-	// --- History ---
-	let historyItems: HistoryEntry[] | null = $state(null);
-	let historyLoading = $state(false);
-	let historyOpen = $state(false);
-
-	async function toggleHistory() {
-		historyOpen = !historyOpen;
-		if (historyOpen && !historyItems) {
-			historyLoading = true;
-			try {
-				const response = await authedFetch('/api/history');
-				const data = await response.json();
-				historyItems = (data.analyses as HistoryEntry[]) ?? [];
-			} catch {
-				historyItems = [];
-			} finally {
-				historyLoading = false;
-			}
-		}
-	}
-
 	function resetResultState() {
 		expandedTopics.clear();
 		aiExplanations.clear();
@@ -242,23 +103,6 @@ import { API_BASE } from '$lib/api';
 		overallQuizSelected.clear();
 		searchQuery = '';
 		loadDoneTopics();
-	}
-
-	async function openHistoryItem(id: number) {
-		uiState = 'PROCESSING';
-		errorMessage = null;
-		try {
-			const response = await authedFetch(`/api/history/${id}`);
-			const data = await response.json();
-			if (!response.ok) throw new Error(data.detail ?? 'Failed to load this analysis');
-			result = data as AnalyzeResponse;
-			resetResultState();
-			historyOpen = false;
-			uiState = 'SUCCESS';
-		} catch (err) {
-			errorMessage = err instanceof Error ? err.message : 'Something went wrong';
-			uiState = 'ERROR';
-		}
 	}
 
 	let selectedFile: File | null = $state(null);
@@ -283,43 +127,14 @@ import { API_BASE } from '$lib/api';
 	let overallQuizIndex = $state(0);
 	let overallQuizSelected = new SvelteMap<number, number>();
 
-	// --- Dark mode ---
-	let theme: 'light' | 'dark' = $state('light');
-
-	function applyTheme(next: 'light' | 'dark') {
-		theme = next;
-		document.documentElement.setAttribute('data-theme', next);
-		try {
-			localStorage.setItem('theme', next);
-		} catch {
-			// localStorage unavailable - theme just won't persist
-		}
-	}
-
-	function toggleTheme() {
-		applyTheme(theme === 'dark' ? 'light' : 'dark');
-	}
-
-	onMount(() => {
-		let stored: string | null = null;
-		try {
-			stored = localStorage.getItem('theme');
-		} catch {
-			// ignore
-		}
-		const prefersDark = window.matchMedia?.('(prefers-color-scheme: dark)').matches;
-		applyTheme(stored === 'dark' || stored === 'light' ? stored : prefersDark ? 'dark' : 'light');
-		checkStoredAuth();
-	});
-
 	// --- Mark topic as done ---
 	// Scoped per (account, video) so a fresh video never starts with topics
 	// already checked off from something unrelated.
 	let doneTopics = new SvelteSet<string>();
 
 	function doneTopicsKey(): string | null {
-		if (!userEmail || !result?.source) return null;
-		return `done-topics:${userEmail}:${result.source}`;
+		if (!auth.email || !result?.source) return null;
+		return `done-topics:${auth.email}:${result.source}`;
 	}
 
 	function loadDoneTopics() {
@@ -434,7 +249,7 @@ import { API_BASE } from '$lib/api';
 		explainLoading.add(topic.heading);
 		explainErrors.delete(topic.heading);
 		try {
-			const response = await authedFetch('/api/topic/explain', {
+			const response = await auth.fetch('/api/topic/explain', {
 				method: 'POST',
 				headers: { 'Content-Type': 'application/json' },
 				body: JSON.stringify({
@@ -489,7 +304,7 @@ import { API_BASE } from '$lib/api';
 		if (quizLoading.has(topic.heading) || quizzes.has(topic.heading)) return;
 		quizLoading.add(topic.heading);
 		try {
-			const response = await authedFetch('/api/topic/quiz', {
+			const response = await auth.fetch('/api/topic/quiz', {
 				method: 'POST',
 				headers: { 'Content-Type': 'application/json' },
 				body: JSON.stringify({
@@ -532,7 +347,7 @@ import { API_BASE } from '$lib/api';
 		overallQuizLoading = true;
 		overallQuizError = null;
 		try {
-			const response = await authedFetch('/api/quiz/overall', {
+			const response = await auth.fetch('/api/quiz/overall', {
 				method: 'POST',
 				headers: { 'Content-Type': 'application/json' },
 				body: JSON.stringify({ roadmap: result.roadmap })
@@ -627,7 +442,7 @@ import { API_BASE } from '$lib/api';
 		if (targetLanguage) formData.append('target_language', targetLanguage);
 
 		try {
-			const response = await authedFetch('/api/analyze', {
+			const response = await auth.fetch('/api/analyze', {
 				method: 'POST',
 				body: formData
 			});
@@ -640,7 +455,6 @@ import { API_BASE } from '$lib/api';
 
 			result = data as AnalyzeResponse;
 			resetResultState();
-			historyItems = null; // stale until reopened, since a new analysis was just saved
 			uiState = 'SUCCESS';
 		} catch (err) {
 			errorMessage = err instanceof Error ? err.message : 'Something went wrong';
@@ -648,98 +462,6 @@ import { API_BASE } from '$lib/api';
 		}
 	}
 </script>
-
-<main>
-	<button
-		class="theme-toggle"
-		aria-label={theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
-		onclick={toggleTheme}
-	>
-		{theme === 'dark' ? '☀️' : '🌙'}
-	</button>
-
-	<h1>AI Video Knowledge Extractor</h1>
-	<p class="tagline">Turn any video into a structured, interactive learning roadmap.</p>
-
-	{#if !authChecked}
-		<p class="status">Loading…</p>
-	{:else if !authToken}
-		<section class="card auth-card">
-			<h2>{authView === 'login' ? 'Log in' : 'Create an account'}</h2>
-			<form
-				onsubmit={(e) => {
-					e.preventDefault();
-					submitAuth();
-				}}
-			>
-				<input
-					type="email"
-					class="url-input"
-					placeholder="Email"
-					bind:value={authEmailInput}
-					autocomplete="email"
-					required
-				/>
-				<input
-					type="password"
-					class="url-input"
-					placeholder={authView === 'signup' ? 'Password (min 8 characters)' : 'Password'}
-					bind:value={authPasswordInput}
-					autocomplete={authView === 'login' ? 'current-password' : 'new-password'}
-					minlength="8"
-					required
-				/>
-				<button type="submit" class="analyze-btn" disabled={authLoading}>
-					{authLoading ? 'Please wait…' : authView === 'login' ? 'Log in' : 'Sign up'}
-				</button>
-			</form>
-			{#if authError}
-				<p class="error">{authError}</p>
-			{/if}
-			<p class="auth-switch">
-				{authView === 'login' ? "Don't have an account?" : 'Already have an account?'}
-				<button
-					class="link-btn"
-					onclick={() => {
-						authView = authView === 'login' ? 'signup' : 'login';
-						authError = null;
-					}}
-				>
-					{authView === 'login' ? 'Sign up' : 'Log in'}
-				</button>
-			</p>
-		</section>
-	{:else}
-		<div class="account-bar">
-			<span class="account-email">{userEmail}</span>
-			<button class="ai-action-btn" onclick={toggleHistory}>
-				{historyOpen ? 'Hide history' : 'History'}
-			</button>
-			<button class="ai-action-btn" onclick={logout}>Log out</button>
-		</div>
-
-		{#if historyOpen}
-			<section class="card history-card">
-				<h2>Past Analyses</h2>
-				{#if historyLoading}
-					<p class="ai-loading">Loading…</p>
-				{:else if historyItems && historyItems.length === 0}
-					<p class="roadmap-hint">No analyses yet — run one below.</p>
-				{:else if historyItems}
-					<ul class="history-list">
-						{#each historyItems as item}
-							<li>
-								<button class="history-item" onclick={() => openHistoryItem(item.id)}>
-									<span class="history-source">{item.source}</span>
-									<span class="history-intro">{item.intro}</span>
-									<span class="history-date">{new Date(item.created_at).toLocaleString()}</span>
-								</button>
-							</li>
-						{/each}
-					</ul>
-				{/if}
-			</section>
-		{/if}
 
 	<section
 		class="card"
@@ -1115,8 +837,6 @@ import { API_BASE } from '$lib/api';
 			</div>
 		</section>
 	{/if}
-	{/if}
-</main>
 
 <style>
 	:global(:root) {
@@ -1163,29 +883,6 @@ import { API_BASE } from '$lib/api';
 		color: var(--text-primary);
 	}
 
-	main {
-		max-width: 1400px;
-		margin: 0 auto;
-		padding: 3rem 1.25rem 4rem;
-		font-family:
-			system-ui,
-			-apple-system,
-			'Segoe UI',
-			sans-serif;
-		box-sizing: border-box;
-	}
-
-	h1 {
-		font-size: clamp(1.9rem, 4vw, 2.1rem);
-		margin: 0 auto 0.35rem;
-		background: linear-gradient(100deg, #e26f48 0%, #bb4be7 50%, #3452bd 100%);
-		background-clip: text;
-		-webkit-background-clip: text;
-		-webkit-text-fill-color: transparent;
-		width: fit-content;
-		text-align: center;
-	}
-
 	.results h2 {
 		display: flex;
 		align-items: center;
@@ -1201,17 +898,6 @@ import { API_BASE } from '$lib/api';
 		background: linear-gradient(135deg, #d3643f, #b64be0);
 	}
 
-	main > h1,
-	main > .tagline {
-		text-align: center;
-	}
-
-	.tagline {
-		color: var(--text-secondary);
-		margin: 0 0 2rem;
-		font-size: 1rem;
-	}
-
 	.card {
 		background: var(--card-bg);
 		border-radius: 16px;
@@ -1221,6 +907,7 @@ import { API_BASE } from '$lib/api';
 		padding: 2rem;
 		box-sizing: border-box;
 		border: 2px dashed transparent;
+		text-align: center;
 		transition:
 			border-color 0.15s,
 			background 0.15s;
@@ -1229,10 +916,6 @@ import { API_BASE } from '$lib/api';
 	.card.drag-active {
 		border-color: #ff3e00;
 		background: var(--tint-bg);
-	}
-
-	main > section:first-of-type {
-		text-align: center;
 	}
 
 	.choose-video {
@@ -1357,122 +1040,6 @@ import { API_BASE } from '$lib/api';
 		background: #fdeeea;
 		border-radius: 8px;
 		padding: 0.6rem 0.9rem;
-	}
-
-	/* --- Auth --- */
-	.auth-card {
-		max-width: 24rem;
-		margin: 0 auto;
-	}
-
-	.auth-card form {
-		display: flex;
-		flex-direction: column;
-		gap: 0.75rem;
-	}
-
-	.auth-card .url-input {
-		margin-bottom: 0;
-	}
-
-	.auth-card .analyze-btn {
-		width: 100%;
-		box-sizing: border-box;
-	}
-
-	.auth-switch {
-		margin: 1rem 0 0;
-		font-size: 0.85rem;
-		color: var(--text-muted);
-	}
-
-	.link-btn {
-		background: none;
-		border: none;
-		padding: 0;
-		color: #ff3e00;
-		font-weight: 600;
-		font-size: inherit;
-		font-family: inherit;
-		cursor: pointer;
-		text-decoration: underline;
-	}
-
-	.link-btn:hover {
-		transform: none;
-		box-shadow: none;
-	}
-
-	/* --- Account bar / history --- */
-	.account-bar {
-		display: flex;
-		align-items: center;
-		justify-content: center;
-		gap: 0.75rem;
-		margin-bottom: 1.5rem;
-		flex-wrap: wrap;
-	}
-
-	.account-email {
-		font-size: 0.85rem;
-		color: var(--text-muted);
-	}
-
-	.history-card {
-		margin-bottom: 1.5rem;
-	}
-
-	.history-list {
-		list-style: none;
-		margin: 0.75rem 0 0;
-		padding: 0;
-		display: flex;
-		flex-direction: column;
-		gap: 0.5rem;
-	}
-
-	.history-item {
-		display: flex;
-		flex-direction: column;
-		align-items: flex-start;
-		gap: 0.2rem;
-		width: 100%;
-		box-sizing: border-box;
-		text-align: left;
-		background: var(--surface);
-		border: 1px solid var(--border-soft);
-		border-radius: 8px;
-		padding: 0.6rem 0.85rem;
-		color: var(--text-primary);
-		font-weight: 400;
-	}
-
-	.history-item:hover {
-		background: var(--surface-hover);
-		box-shadow: none;
-		transform: none;
-	}
-
-	.history-source {
-		font-size: 0.8rem;
-		font-weight: 600;
-		color: #ff3e00;
-		word-break: break-all;
-	}
-
-	.history-intro {
-		font-size: 0.85rem;
-		color: var(--text-secondary);
-		display: -webkit-box;
-		-webkit-line-clamp: 2;
-		line-clamp: 2;
-		-webkit-box-orient: vertical;
-		overflow: hidden;
-	}
-
-	.history-date {
-		font-size: 0.72rem;
-		color: var(--text-faint);
 	}
 
 	.results {
@@ -2076,28 +1643,6 @@ import { API_BASE } from '$lib/api';
 		text-align: left;
 	}
 
-	/* --- Dark mode toggle --- */
-	.theme-toggle {
-		position: fixed;
-		top: 1.25rem;
-		right: 1.25rem;
-		width: 2.5rem;
-		height: 2.5rem;
-		padding: 0;
-		border-radius: 50%;
-		background: var(--card-bg);
-		border: 1px solid var(--border-color);
-		font-size: 1.15rem;
-		line-height: 1;
-		box-shadow: 0 2px 8px rgba(20, 20, 30, 0.1);
-		z-index: 10;
-	}
-
-	.theme-toggle:hover:not(:disabled) {
-		transform: none;
-		box-shadow: 0 2px 10px rgba(20, 20, 30, 0.16);
-	}
-
 	/* --- Output language select --- */
 	.language-select-label {
 		flex: 0 0 auto;
@@ -2217,10 +1762,6 @@ import { API_BASE } from '$lib/api';
 	}
 
 	@media (max-width: 640px) {
-		main {
-			padding: 1.75rem 0.85rem 3rem;
-		}
-
 		.card {
 			padding: 1.25rem;
 			border-radius: 12px;
