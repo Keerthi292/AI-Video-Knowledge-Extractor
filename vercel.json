@@ -3,20 +3,9 @@
     "frontend": {
       "root": "frontend/",
       "framework": "sveltekit"
-    },
-    "backend": {
-      "root": "backend/",
-      "entrypoint": "main:app",
-      "framework": "fastapi"
     }
   },
   "rewrites": [
-    {
-      "source": "/api/(.*)",
-      "destination": {
-        "service": "backend"
-      }
-    },
     {
       "source": "/(.*)",
       "destination": {
