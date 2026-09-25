@@ -5,9 +5,12 @@ Turns a video (file or URL) into an interactive learning roadmap — intro, key 
 ## Architecture
 
 ```
-Video URL ──► MCP: fetch_video_details ─┬─ captions ────────────────► Gemini ─┐
-                                         └─ no captions ─► yt-dlp audio ─► Whisper ─┘
-Uploaded file ──► FFmpeg ──► Whisper ──► Gemini
+YouTube URL ──► Gemini STT (Google fetches the video) ───────────────────────► Gemini ─┐
+     │ (if Gemini can't)                                                               │
+     ▼                                                                                 │
+Video URL ──► MCP: fetch_video_details ─┬─ captions ─────────────────────────► Gemini ─┤
+                                         └─ no captions ─► yt-dlp audio ─► Gemini STT ─┘
+Uploaded file ──► FFmpeg (MP3) ──► Gemini STT ──► Gemini
                                               │
                                               ▼
                                    Roadmap + Quizzes (MCP tools)
@@ -17,7 +20,7 @@ Uploaded file ──► FFmpeg ──► Whisper ──► Gemini
 ```
 
 - **Frontend** (`frontend/`): SvelteKit, routes = `/` (upload), `/history`, `/analysis/[id]`, shared layout for auth/theme.
-- **Backend** (`backend/main.py`): FastAPI. Every Gemini/yt-dlp/account/history operation is proxied through one local **MCP tool server** (`backend/mcp_server/`), auto-spawned by `main.py`.
+- **Backend** (`backend/main.py`): FastAPI. Every Gemini/yt-dlp/account/history operation is proxied through one local **MCP tool server** (`backend/mcp_server/`), auto-spawned by `main.py` — except speech-to-text (`services/transcriber.py`), which FastAPI calls directly.
 - **Data**: SQLite (`backend/app.db`) — users, sessions, analyses (with per-topic done-state).
 - **Docker**: `docker-compose.yml` builds both services; backend DB path is a mounted volume.
 
@@ -27,11 +30,14 @@ Uploaded file ──► FFmpeg ──► Whisper ──► Gemini
 flowchart TD
     Z[Sign up / Log in] -->|MCP: signup / login| A[Upload file OR paste URL]
     A --> B{Input type?}
-    B -- URL --> C[MCP: fetch_video_details]
+    B -- YouTube URL --> Y[Gemini: transcribe YouTube URL]
+    Y -- ok --> E
+    Y -- failed --> C
+    B -- other URL --> C[MCP: fetch_video_details]
     C --> D{Captions?}
     D -- yes --> E[Transcript]
-    D -- no --> F[yt-dlp: audio] --> G[Whisper] --> E
-    B -- File --> H[FFmpeg] --> I[Whisper] --> E
+    D -- no --> F[yt-dlp: audio] --> G[Gemini speech-to-text] --> E
+    B -- File --> H[FFmpeg] --> I[Gemini speech-to-text] --> E
     E --> J[MCP: summarize_transcript]
     J --> K[yt-dlp: related videos]
     K --> L[Roadmap saved to SQLite]
@@ -46,11 +52,11 @@ flowchart TD
 
 ## MCP Tools
 
-Every Gemini/yt-dlp call, and every account/history read or write, goes through one local MCP tool server (`backend/mcp_server/video_details_server.py`), auto-spawned by `main.py` on startup. FastAPI never touches Gemini, yt-dlp, or the database directly — it's a thin HTTP layer that calls these tools and returns the result. That means the same tools are callable by any MCP client, not just this app's own frontend.
+Every Gemini/yt-dlp call (apart from speech-to-text), and every account/history read or write, goes through one local MCP tool server (`backend/mcp_server/video_details_server.py`), auto-spawned by `main.py` on startup. FastAPI otherwise never touches Gemini, yt-dlp, or the database directly — it's a thin HTTP layer that calls these tools and returns the result. That means the same tools are callable by any MCP client, not just this app's own frontend.
 
 | Tool | Args | What it does |
 |---|---|---|
-| `fetch_video_details` | `url` | Reads a video's existing captions/subtitles via `yt-dlp` — no video or audio download. Raises a distinct error if no captions exist, so the caller knows to fall back to Whisper. |
+| `fetch_video_details` | `url` | Reads a video's existing captions/subtitles via `yt-dlp` — no video or audio download. Raises a distinct error if no captions exist, so the caller knows to fall back to audio transcription. |
 | `summarize_transcript` | `transcript`, `target_language?` | Sends the transcript to Gemini, gets back `intro`, `key_points`, and a nested `roadmap` of topics/sub-topics with examples. If `target_language` is set, the whole output is written in that language regardless of the transcript's own. |
 | `explain_topic` | `heading`, `content`, `example?` | Asks Gemini to go deeper on one roadmap topic — context, nuance, common misconceptions — beyond what's already in `content`. |
 | `quiz_topic` | `heading`, `content`, `example?` | Gemini generates a 5-question multiple-choice quiz scoped to just that topic, difficulty-tagged, code-aware if the topic has a code example. |
@@ -82,7 +88,7 @@ sequenceDiagram
 
     User->>UI: Analyze video
     UI->>API: POST /api/analyze (Bearer)
-    API->>API: transcript (captions or Whisper)
+    API->>G: transcript (YouTube URL or audio → Gemini speech-to-text; or captions)
     API->>MCP: summarize_transcript
     MCP->>G: generate roadmap
     G-->>MCP: roadmap
@@ -115,16 +121,16 @@ sequenceDiagram
 | **SvelteKit** | UI: upload, roadmap, history, quizzes |
 | **FastAPI** | HTTP orchestrator, auth guard |
 | **MCP** | Single tool surface for every Gemini/yt-dlp/account/history op |
-| **yt-dlp** | Captions, audio download, related-video search — no API key |
-| **FFmpeg** | Audio extraction from uploaded files |
-| **Whisper** | Speech-to-text fallback (CPU) when no captions exist |
+| **yt-dlp** | Fallback captions/audio download for URLs, related-video search — no API key |
+| **FFmpeg** | Audio extraction (low-bitrate MP3) from uploaded files |
+| **Gemini speech-to-text** | Transcribes YouTube URLs directly (no download, so no YouTube bot-wall on cloud hosts) and uploaded audio |
 | **Gemini** | Roadmap generation, explanations, quizzes |
 | **SQLite** | Accounts, sessions, saved analyses — one file, no extra service |
 
 ## Features
 
 - Sign up / log in — private per-account history
-- Upload a file **or** paste a URL; captions-first, Whisper fallback
+- Upload a file **or** paste a URL; YouTube links go straight to Gemini, other URLs use captions first with a Gemini speech-to-text fallback
 - Roadmap: intro, key points, nested topics with examples, related links, real related YouTube videos
 - Output language override (translate the roadmap regardless of source language)
 - **Explain** (deeper AI breakdown) / **Quiz me** (5 Qs) / **Final Quiz** (10-15 Qs) — difficulty-tagged, code-aware
@@ -183,6 +189,14 @@ npm install && npm run dev      # :5173
 ```
 
 Requires `GEMINI_API_KEY` (`backend/.env`, free at [aistudio.google.com/apikey](https://aistudio.google.com/apikey)) and `ffmpeg` on `PATH` for local dev.
+
+## Deployment
+
+- **Frontend → Vercel.** `vercel.json` builds only `frontend/`. The API base URL comes from `PUBLIC_API_URL` if set, otherwise production builds use the Render URL hard-coded in `frontend/src/lib/api.ts`.
+- **Backend → Render**, from `backend/Dockerfile`. Set `GEMINI_API_KEY`. SQLite is wiped on every redeploy unless you attach a persistent disk and point `DB_PATH` at it. Set the health check path to `/api/health`.
+- **Why not the backend on Vercel:** its serverless functions have a read-only filesystem and can't keep the MCP subprocess running.
+- **YouTube on cloud hosts:** YouTube blocks yt-dlp from datacenter IPs ("Sign in to confirm you're not a bot"). Public YouTube links avoid this because Gemini fetches them on Google's side. Only the yt-dlp fallback needs `YTDLP_COOKIES_FILE` / `POT_PROVIDER_BASE_URL` (see `services/downloader.py`).
+- **Gemini availability:** transcription tries several models in turn (`TRANSCRIPTION_MODELS` in `services/transcriber.py`), since individual models often return 503 "high demand" and pinned versions get retired. Free-tier limits apply, including a daily cap on YouTube video length processed.
 
 ## Status
 

@@ -1,4 +1,6 @@
 import asyncio
+import logging
+import re
 import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -15,8 +17,12 @@ from services import db
 from services.audio_extractor import AudioExtractionError, extract_audio
 from services.downloader import POT_PROVIDER_BASE_URL, YTDLP_COOKIES_FILE, VideoDownloadError, download_audio
 from services.mcp_client import MCPToolError, VideoDetailsMCPClient
-from services.transcriber import TranscriptionError, transcribe_audio
+from services.transcriber import TranscriptionError, transcribe_audio, transcribe_youtube_url
 from services.video_search import search_youtube_videos
+
+logger = logging.getLogger(__name__)
+
+YOUTUBE_URL_RE = re.compile(r"^https?://(www\.|m\.|music\.)?(youtube\.com|youtu\.be)/", re.IGNORECASE)
 
 
 @asynccontextmanager
@@ -93,27 +99,27 @@ def _bearer_token(authorization: str | None) -> str:
 
 async def _transcribe_url_via_audio(url: str) -> tuple[str, str | None]:
     """Fallback for URLs with no usable captions: download just the audio
-    and transcribe it locally with Whisper. Returns (transcript, language)."""
+    and transcribe it with Gemini. Returns (transcript, language)."""
     try:
         raw_audio_path = await asyncio.to_thread(download_audio, url, UPLOAD_DIR)
     except VideoDownloadError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
 
-    wav_path: Path | None = None
+    audio_path: Path | None = None
     try:
         try:
-            wav_path = await asyncio.to_thread(extract_audio, raw_audio_path)
+            audio_path = await asyncio.to_thread(extract_audio, raw_audio_path)
         except AudioExtractionError as exc:
             raise HTTPException(status_code=500, detail=str(exc))
 
         try:
-            return await asyncio.to_thread(transcribe_audio, wav_path)
+            return await asyncio.to_thread(transcribe_audio, audio_path)
         except TranscriptionError as exc:
             raise HTTPException(status_code=500, detail=str(exc))
     finally:
         raw_audio_path.unlink(missing_ok=True)
-        if wav_path is not None:
-            wav_path.unlink(missing_ok=True)
+        if audio_path is not None:
+            audio_path.unlink(missing_ok=True)
 
 
 class TopicRequest(BaseModel):
@@ -282,22 +288,33 @@ async def analyze_video(
         raise HTTPException(status_code=400, detail="Provide only one of: video file or video URL")
 
     if url:
-        # Try captions first via the MCP server (no video/audio download).
-        # If no usable captions exist, fall back to downloading just the
-        # audio and transcribing it with Whisper, same as an uploaded file.
+        transcript: str | None = None
         detected_language: str | None = None
-        try:
-            details = await app.state.mcp_client.fetch_video_details(url)
-            transcript = details["transcript"]
-            detected_language = details.get("language")
-        except MCPToolError as exc:
-            message = str(exc)
-            if "TRANSCRIPT_UNAVAILABLE:" in message:
-                transcript, detected_language = await _transcribe_url_via_audio(url)
-            elif "VIDEO_DOWNLOAD_ERROR:" in message:
-                raise HTTPException(status_code=400, detail=message.split("VIDEO_DOWNLOAD_ERROR:", 1)[1].strip())
-            else:
-                raise HTTPException(status_code=502, detail=f"Video details MCP tool failed: {message}")
+
+        # YouTube bot-walls yt-dlp from cloud-host IPs, so for YouTube links
+        # let Gemini fetch the video on Google's side first.
+        if YOUTUBE_URL_RE.match(url):
+            try:
+                transcript, detected_language = await asyncio.to_thread(transcribe_youtube_url, url)
+            except TranscriptionError as exc:
+                logger.warning("Gemini YouTube transcription failed, falling back to yt-dlp: %s", exc)
+
+        # Otherwise try captions via the MCP server (no video/audio download).
+        # If no usable captions exist, fall back to downloading just the
+        # audio and transcribing it with Gemini, same as an uploaded file.
+        if not transcript:
+            try:
+                details = await app.state.mcp_client.fetch_video_details(url)
+                transcript = details["transcript"]
+                detected_language = details.get("language")
+            except MCPToolError as exc:
+                message = str(exc)
+                if "TRANSCRIPT_UNAVAILABLE:" in message:
+                    transcript, detected_language = await _transcribe_url_via_audio(url)
+                elif "VIDEO_DOWNLOAD_ERROR:" in message:
+                    raise HTTPException(status_code=400, detail=message.split("VIDEO_DOWNLOAD_ERROR:", 1)[1].strip())
+                else:
+                    raise HTTPException(status_code=502, detail=f"Video details MCP tool failed: {message}")
 
         try:
             analysis = await app.state.mcp_client.summarize_transcript(transcript, target_language)
