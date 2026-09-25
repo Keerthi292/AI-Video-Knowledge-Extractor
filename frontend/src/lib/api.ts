@@ -1,4 +1,8 @@
+import { dev } from '$app/environment';
 import { env } from '$env/dynamic/public';
 
-// Empty = same origin; on Vercel, /api/* is rewritten to the backend service.
-export const API_BASE = env.PUBLIC_API_URL ?? '';
+// PUBLIC_API_URL overrides; otherwise dev hits the local backend via .env and
+// production builds talk to the Render deployment directly.
+const PRODUCTION_API_URL = 'https://ai-video-knowledge-extractor.onrender.com';
+
+export const API_BASE = env.PUBLIC_API_URL || (dev ? '' : PRODUCTION_API_URL);
