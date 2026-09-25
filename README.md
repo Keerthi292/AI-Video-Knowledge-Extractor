@@ -198,7 +198,3 @@ Requires `GEMINI_API_KEY` (`backend/.env`, free at [aistudio.google.com/apikey](
 - **Why not the backend on Vercel:** its serverless functions have a read-only filesystem and can't keep the MCP subprocess running.
 - **YouTube on cloud hosts:** YouTube blocks yt-dlp from datacenter IPs ("Sign in to confirm you're not a bot"). Public YouTube links avoid this because Gemini fetches them on Google's side. Only the yt-dlp fallback needs `YTDLP_COOKIES_FILE` / `POT_PROVIDER_BASE_URL` (see `services/downloader.py`).
 - **Gemini availability:** transcription tries several models in turn (`TRANSCRIPTION_MODELS` in `services/transcriber.py`), since individual models often return 503 "high demand" and pinned versions get retired. Free-tier limits apply, including a daily cap on YouTube video length processed.
-
-## Status
-
-Full pipeline, accounts, per-user history, all Gemini/yt-dlp/account/history ops as MCP tools, dark mode, export, and Docker are all in place end-to-end.
