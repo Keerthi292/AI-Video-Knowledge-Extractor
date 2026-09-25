@@ -1,3 +1,4 @@
-import { PUBLIC_API_URL } from '$env/static/public';
+import { env } from '$env/dynamic/public';
 
-export const API_BASE = PUBLIC_API_URL;
+// Empty = same origin; on Vercel, /api/* is rewritten to the backend service.
+export const API_BASE = env.PUBLIC_API_URL ?? '';
