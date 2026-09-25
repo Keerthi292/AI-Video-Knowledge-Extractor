@@ -88,7 +88,8 @@ sequenceDiagram
 
     User->>UI: Analyze video
     UI->>API: POST /api/analyze (Bearer)
-    API->>G: transcript (YouTube URL or audio → Gemini speech-to-text; or captions)
+    API->>G: transcribe YouTube URL or audio (or use captions)
+    G-->>API: transcript
     API->>MCP: summarize_transcript
     MCP->>G: generate roadmap
     G-->>MCP: roadmap

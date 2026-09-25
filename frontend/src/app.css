@@ -15,6 +15,8 @@
 	--tint-bg-strong: #fff0eb;
 	--mix-light: white;
 	--mix-dark: black;
+	--link-color: #3454c9;
+	--error-text: #c53000;
 }
 
 :root[data-theme='dark'] {
@@ -34,6 +36,8 @@
 	--tint-bg-strong: rgba(255, 62, 0, 0.16);
 	--mix-light: #262633;
 	--mix-dark: #f0f0f2;
+	--link-color: #8fa6ff;
+	--error-text: #ff8a65;
 }
 
 body {
@@ -750,7 +754,7 @@ a {
 }
 
 .ai-error {
-	color: #c53000;
+	color: var(--error-text);
 	font-size: 0.85rem;
 	margin-top: 0.5rem;
 }
@@ -987,7 +991,7 @@ a {
 	align-items: center;
 	gap: 0.5rem;
 	font-size: 0.9rem;
-	color: #3454c9;
+	color: var(--link-color);
 	text-decoration: none;
 	padding: 0.25rem 0;
 }

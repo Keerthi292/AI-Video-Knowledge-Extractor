@@ -122,6 +122,30 @@ async def _transcribe_url_via_audio(url: str) -> tuple[str, str | None]:
             audio_path.unlink(missing_ok=True)
 
 
+async def _transcribe_url_via_yt_dlp(url: str) -> tuple[str, str | None]:
+    """Captions via the MCP server (no video/audio download); if the video
+    has none, download just the audio and transcribe it with Gemini."""
+    try:
+        details = await app.state.mcp_client.fetch_video_details(url)
+        return details["transcript"], details.get("language")
+    except MCPToolError as exc:
+        message = str(exc)
+        if "TRANSCRIPT_UNAVAILABLE:" in message:
+            return await _transcribe_url_via_audio(url)
+        if "VIDEO_DOWNLOAD_ERROR:" in message:
+            raise HTTPException(status_code=400, detail=message.split("VIDEO_DOWNLOAD_ERROR:", 1)[1].strip())
+        raise HTTPException(status_code=502, detail=f"Video details MCP tool failed: {message}")
+
+
+def _gemini_failure_message(exc: TranscriptionError) -> str:
+    if "RESOURCE_EXHAUSTED" in str(exc):
+        return (
+            "Gemini's free usage limit has been reached for now, so this YouTube video "
+            "couldn't be analyzed. Please try again later (the limit resets daily)."
+        )
+    return "Gemini is busy right now and couldn't analyze this YouTube video. Please try again in a few minutes."
+
+
 class TopicRequest(BaseModel):
     heading: str
     content: str
@@ -293,28 +317,24 @@ async def analyze_video(
 
         # YouTube bot-walls yt-dlp from cloud-host IPs, so for YouTube links
         # let Gemini fetch the video on Google's side first.
+        gemini_error: TranscriptionError | None = None
         if YOUTUBE_URL_RE.match(url):
             try:
                 transcript, detected_language = await asyncio.to_thread(transcribe_youtube_url, url)
             except TranscriptionError as exc:
                 logger.warning("Gemini YouTube transcription failed, falling back to yt-dlp: %s", exc)
+                gemini_error = exc
 
-        # Otherwise try captions via the MCP server (no video/audio download).
-        # If no usable captions exist, fall back to downloading just the
-        # audio and transcribing it with Gemini, same as an uploaded file.
+        # Other URLs (or if Gemini couldn't handle the YouTube link) go via yt-dlp.
         if not transcript:
             try:
-                details = await app.state.mcp_client.fetch_video_details(url)
-                transcript = details["transcript"]
-                detected_language = details.get("language")
-            except MCPToolError as exc:
-                message = str(exc)
-                if "TRANSCRIPT_UNAVAILABLE:" in message:
-                    transcript, detected_language = await _transcribe_url_via_audio(url)
-                elif "VIDEO_DOWNLOAD_ERROR:" in message:
-                    raise HTTPException(status_code=400, detail=message.split("VIDEO_DOWNLOAD_ERROR:", 1)[1].strip())
-                else:
-                    raise HTTPException(status_code=502, detail=f"Video details MCP tool failed: {message}")
+                transcript, detected_language = await _transcribe_url_via_yt_dlp(url)
+            except HTTPException as exc:
+                # On cloud hosts the yt-dlp fallback just hits YouTube's bot
+                # wall, which hides why the Gemini attempt failed - report that.
+                if gemini_error is not None:
+                    raise HTTPException(status_code=503, detail=_gemini_failure_message(gemini_error)) from exc
+                raise
 
         try:
             analysis = await app.state.mcp_client.summarize_transcript(transcript, target_language)

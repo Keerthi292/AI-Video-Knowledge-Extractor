@@ -857,6 +857,8 @@ import { auth } from '$lib/auth.svelte';
 		--tint-bg-strong: #fff0eb;
 		--mix-light: white;
 		--mix-dark: black;
+		--link-color: #3454c9;
+		--error-text: #c53000;
 	}
 
 	:global(:root[data-theme='dark']) {
@@ -876,6 +878,8 @@ import { auth } from '$lib/auth.svelte';
 		--tint-bg-strong: rgba(255, 62, 0, 0.16);
 		--mix-light: #262633;
 		--mix-dark: #f0f0f2;
+		--link-color: #8fa6ff;
+		--error-text: #ff8a65;
 	}
 
 	:global(body) {
@@ -1280,7 +1284,7 @@ import { auth } from '$lib/auth.svelte';
 	.node-details {
 		position: relative;
 		margin-bottom: 0.75rem;
-		background: #fcfcfd;
+		background: var(--card-bg);
 		border: 1px solid var(--border-soft);
 		border-radius: 12px;
 		padding: 2.5rem 1.25rem 1rem;
@@ -1307,7 +1311,7 @@ import { auth } from '$lib/auth.svelte';
 		border-radius: 999px;
 		padding: 0.2rem 0.7rem;
 		cursor: pointer;
-		color: #444;
+		color: var(--text-primary);
 	}
 
 	.related-link:hover {
@@ -1383,7 +1387,7 @@ import { auth } from '$lib/auth.svelte';
 	}
 
 	.ai-error {
-		color: #c53000;
+		color: var(--error-text);
 		font-size: 0.85rem;
 		margin-top: 0.5rem;
 	}
@@ -1620,7 +1624,7 @@ import { auth } from '$lib/auth.svelte';
 		align-items: center;
 		gap: 0.5rem;
 		font-size: 0.9rem;
-		color: #3454c9;
+		color: var(--link-color);
 		text-decoration: none;
 		padding: 0.25rem 0;
 	}
