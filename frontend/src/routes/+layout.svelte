@@ -4,9 +4,15 @@
 	import favicon from '$lib/assets/favicon.svg';
 	import { auth } from '$lib/auth.svelte';
 	import { theme } from '$lib/theme.svelte';
+	import SplashScreen from '$lib/SplashScreen.svelte';
+	import Logo from '$lib/Logo.svelte';
 	import '../app.css';
 
 	let { children } = $props();
+
+	// Loading screen shown once when the app opens.
+	const SPLASH_DURATION_MS = 3000;
+	let showSplash = $state(true);
 
 	let onHistoryPage = $derived(page.url.pathname === '/history');
 	// Shared links are public - they render without the login gate.
@@ -33,6 +39,8 @@
 	onMount(() => {
 		theme.init();
 		auth.checkStored();
+		const splashTimer = setTimeout(() => (showSplash = false), SPLASH_DURATION_MS);
+		return () => clearTimeout(splashTimer);
 	});
 </script>
 
@@ -40,15 +48,24 @@
 	<link rel="icon" href={favicon} />
 </svelte:head>
 
+{#if showSplash}
+	<SplashScreen durationMs={SPLASH_DURATION_MS} />
+{/if}
+
 <main>
 	<button
 		class="theme-toggle"
 		aria-label={theme.value === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
 		onclick={() => theme.toggle()}
 	>
-		{theme.value === 'dark' ? '☀️' : '🌙'}
+		{#if theme.value === 'dark'}
+			<svg class="theme-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4" /><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41" /></svg>
+		{:else}
+			<svg class="theme-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z" /></svg>
+		{/if}
 	</button>
 
+	<Logo class="header-logo" />
 	<h1>AI Video Knowledge Extractor</h1>
 	<p class="tagline">Turn any video into a structured, interactive learning roadmap.</p>
 

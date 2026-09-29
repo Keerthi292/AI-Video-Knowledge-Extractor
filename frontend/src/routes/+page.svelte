@@ -4,6 +4,10 @@ import { auth } from '$lib/auth.svelte';
 	import { SvelteSet, SvelteMap } from 'svelte/reactivity';
 	import { slide } from 'svelte/transition';
 	import { createQuizPrefetcher } from '$lib/quizPrefetch';
+	import { fly } from 'svelte/transition';
+	import QuizRunner from '$lib/QuizRunner.svelte';
+	import Celebration from '$lib/Celebration.svelte';
+	import { motion } from '$lib/motion';
 
 	type UiState = 'IDLE' | 'FILE_SELECTED' | 'PROCESSING' | 'SUCCESS' | 'ERROR';
 
@@ -96,12 +100,8 @@ import { auth } from '$lib/auth.svelte';
 		expandedExplainPoints.clear();
 		quizzes.clear();
 		quizLoading.clear();
-		quizIndex.clear();
-		quizSelected.clear();
 		overallQuiz = null;
 		overallQuizError = null;
-		overallQuizIndex = 0;
-		overallQuizSelected.clear();
 		searchQuery = '';
 		quizPrefetch.clear();
 		loadDoneTopics();
@@ -119,15 +119,14 @@ import { auth } from '$lib/auth.svelte';
 	let expandedExplainPoints = new SvelteSet<string>();
 	let quizzes = new SvelteMap<string, QuizQuestion[]>();
 	let quizLoading = new SvelteSet<string>();
-	let quizIndex = new SvelteMap<string, number>();
-	let quizSelected = new SvelteMap<string, number>();
 	let copiedHeading: string | null = $state(null);
 
 	let overallQuiz: QuizQuestion[] | null = $state(null);
 	let overallQuizLoading = $state(false);
 	let overallQuizError: string | null = $state(null);
-	let overallQuizIndex = $state(0);
-	let overallQuizSelected = new SvelteMap<number, number>();
+
+	// Bumped to play the confetti when every topic is marked done.
+	let celebrateAllDone = $state(0);
 
 	// --- Mark topic as done ---
 	// Scoped per (account, video) so a fresh video never starts with topics
@@ -168,6 +167,13 @@ import { auth } from '$lib/auth.svelte';
 			doneTopics.delete(heading);
 		} else {
 			doneTopics.add(heading);
+		}
+		if (
+			doneTopics.has(heading) &&
+			result &&
+			allTopics(result.roadmap).every((t) => doneTopics.has(t.heading))
+		) {
+			celebrateAllDone += 1;
 		}
 		saveDoneTopics();
 	}
@@ -304,10 +310,11 @@ import { auth } from '$lib/auth.svelte';
 
 	function closeQuiz(heading: string) {
 		quizzes.delete(heading);
-		quizIndex.delete(heading);
-		for (const key of [...quizSelected.keys()]) {
-			if (key.startsWith(`${heading}#`)) quizSelected.delete(key);
-		}
+	}
+
+	function retakeQuiz(topic: Topic) {
+		closeQuiz(topic.heading);
+		runQuiz(topic);
 	}
 
 	async function runQuiz(topic: Topic) {
@@ -315,29 +322,10 @@ import { auth } from '$lib/auth.svelte';
 		quizLoading.add(topic.heading);
 		try {
 			quizzes.set(topic.heading, await quizPrefetch.take(topic));
-			quizIndex.set(topic.heading, 0);
 		} catch (err) {
 			// Leave the quiz section empty; the Quiz me button stays available to retry.
 		} finally {
 			quizLoading.delete(topic.heading);
-		}
-	}
-
-	function quizAnswerKey(heading: string, questionIndex: number) {
-		return `${heading}#${questionIndex}`;
-	}
-
-	function selectQuizOption(heading: string, questionIndex: number, optionIndex: number) {
-		const key = quizAnswerKey(heading, questionIndex);
-		if (quizSelected.has(key)) return;
-		quizSelected.set(key, optionIndex);
-	}
-
-	function nextQuizQuestion(heading: string) {
-		const total = quizzes.get(heading)?.length ?? 0;
-		const current = quizIndex.get(heading) ?? 0;
-		if (current + 1 < total) {
-			quizIndex.set(heading, current + 1);
 		}
 	}
 
@@ -354,8 +342,6 @@ import { auth } from '$lib/auth.svelte';
 			const data = await response.json();
 			if (!response.ok) throw new Error(data.detail ?? 'Failed to generate the quiz');
 			overallQuiz = data.questions as QuizQuestion[];
-			overallQuizIndex = 0;
-			overallQuizSelected.clear();
 		} catch (err) {
 			overallQuizError = err instanceof Error ? err.message : 'Something went wrong';
 		} finally {
@@ -363,27 +349,13 @@ import { auth } from '$lib/auth.svelte';
 		}
 	}
 
-	function selectOverallOption(questionIndex: number, optionIndex: number) {
-		if (overallQuizSelected.has(questionIndex)) return;
-		overallQuizSelected.set(questionIndex, optionIndex);
-	}
-
-	function nextOverallQuestion() {
-		const total = overallQuiz?.length ?? 0;
-		if (overallQuizIndex + 1 < total) overallQuizIndex += 1;
-	}
-
 	function closeOverallQuiz() {
 		overallQuiz = null;
 		overallQuizError = null;
-		overallQuizIndex = 0;
-		overallQuizSelected.clear();
 	}
 
 	function retakeOverallQuiz() {
 		overallQuiz = null;
-		overallQuizIndex = 0;
-		overallQuizSelected.clear();
 		runOverallQuiz();
 	}
 
@@ -596,7 +568,9 @@ import { auth } from '$lib/auth.svelte';
 							{#if isCurrent}
 								<span class="spinner"></span>
 							{:else}
-								<span class="step-check">✓</span>
+								<svg class="step-check" viewBox="0 0 24 24" aria-hidden="true">
+									<path d="M5 12.5l4.5 4.5L19 7.5" />
+								</svg>
 							{/if}
 							{entry.message}
 							<span class="step-time">
@@ -618,7 +592,8 @@ import { auth } from '$lib/auth.svelte';
 	</section>
 
 	{#if uiState === 'SUCCESS' && result}
-		<section class="results card">
+		<Celebration trigger={celebrateAllDone} message="You've completed every topic!" />
+		<section class="results card" in:fly|global={motion({ y: 16, duration: 350 })}>
 			{#if result.detected_language}
 				<span class="language-badge">Detected language: {languageLabel(result.detected_language)}</span>
 			{/if}
@@ -628,12 +603,41 @@ import { auth } from '$lib/auth.svelte';
 				</a>
 			{/if}
 
-			<p class="intro">{result.intro}</p>
+			<div class="summary-row" class:quiz-active={overallQuiz !== null}>
+				<p class="intro">{result.intro}</p>
+
+				<div class="overall-quiz-section final-quiz-card">
+					<h2>Final Quiz</h2>
+					<p class="roadmap-hint">Test yourself on the whole video — 10–15 questions.</p>
+
+					{#if !overallQuiz}
+						<button
+							class="ai-action-btn overall-quiz-btn"
+							disabled={overallQuizLoading}
+							onclick={runOverallQuiz}
+						>
+							{overallQuizLoading ? 'Generating quiz…' : 'Start Final Quiz'}
+						</button>
+						{#if overallQuizError}
+							<p class="ai-error">{overallQuizError}</p>
+						{/if}
+					{:else}
+					{#key overallQuiz}
+						<QuizRunner
+							questions={overallQuiz}
+							title="Full Video Quiz"
+							onClose={closeOverallQuiz}
+							onRetake={retakeOverallQuiz}
+						/>
+					{/key}
+					{/if}
+				</div>
+			</div>
 
 			<h2>Key Points</h2>
 			<ul class="key-points">
-				{#each result.key_points as point}
-					<li>{point}</li>
+				{#each result.key_points as point, i}
+					<li in:fly|global={motion({ y: 8, delay: 120 + i * 70, duration: 280 })}>{point}</li>
 				{/each}
 			</ul>
 
@@ -655,16 +659,6 @@ import { auth } from '$lib/auth.svelte';
 				placeholder="Search roadmap topics…"
 				bind:value={searchQuery}
 			/>
-
-			{#snippet quizText(text: string)}
-				{#each parseCodeSegments(text) as segment}
-					{#if segment.type === 'code'}
-						<pre class="quiz-code"><code>{segment.content}</code></pre>
-					{:else if segment.content.trim()}
-						<span>{segment.content}</span>
-					{/if}
-				{/each}
-			{/snippet}
 
 			{#snippet topicDetails(topic: Topic)}
 				{#if expandedTopics.has(topic.heading)}
@@ -745,52 +739,14 @@ import { auth } from '$lib/auth.svelte';
 						{#if quizLoading.has(topic.heading)}
 							<p class="ai-loading">Generating quiz questions…</p>
 						{:else if quizzes.has(topic.heading)}
-							{@const questions = quizzes.get(topic.heading)!}
-							{@const qIndex = quizIndex.get(topic.heading) ?? 0}
-							{@const question = questions[qIndex]}
-							{@const selected = quizSelected.get(quizAnswerKey(topic.heading, qIndex))}
-							<div class="ai-panel">
-								<button
-									class="ai-panel-close"
-									aria-label="Close quiz"
-									onclick={() => closeQuiz(topic.heading)}
-								>
-									×
-								</button>
-								<div class="quiz-header">
-									<strong>Quiz</strong>
-									<span class="quiz-progress">Question {qIndex + 1} of {questions.length}</span>
-								</div>
-								{#if question.difficulty}
-									<span class="difficulty-badge difficulty-{question.difficulty}">
-										{question.difficulty}
-									</span>
-								{/if}
-								<div class="quiz-question">{@render quizText(question.question)}</div>
-								<div class="quiz-options">
-									{#each question.options as option, idx}
-										<button
-											class="quiz-option"
-											class:correct={selected !== undefined && idx === question.answer_index}
-											class:incorrect={selected === idx && idx !== question.answer_index}
-											disabled={selected !== undefined}
-											onclick={() => selectQuizOption(topic.heading, qIndex, idx)}
-										>
-											{@render quizText(option)}
-										</button>
-									{/each}
-								</div>
-								{#if selected !== undefined}
-									<div class="quiz-explanation">{@render quizText(question.explanation)}</div>
-									{#if qIndex + 1 < questions.length}
-										<button class="quiz-next-btn" onclick={() => nextQuizQuestion(topic.heading)}>
-											Next question →
-										</button>
-									{:else}
-										<p class="quiz-done">Quiz complete for this topic.</p>
-									{/if}
-								{/if}
-							</div>
+						{#key quizzes.get(topic.heading)}
+							<QuizRunner
+								questions={quizzes.get(topic.heading)!}
+								title="Quiz"
+								onClose={() => closeQuiz(topic.heading)}
+								onRetake={() => retakeQuiz(topic)}
+							/>
+						{/key}
 						{/if}
 
 						{#if topic.resources && topic.resources.length}
@@ -828,7 +784,7 @@ import { auth } from '$lib/auth.svelte';
 			{/if}
 			<div class="roadmap">
 				{#each filteredRoadmap as topic, i}
-					<div class="roadmap-node">
+					<div class="roadmap-node" in:fly|global={motion({ y: 12, delay: Math.min(i, 8) * 60, duration: 300 })}>
 						<div class="node-marker" class:marker-active={expandedTopics.has(topic.heading)}>
 							{i + 1}
 						</div>
@@ -864,74 +820,6 @@ import { auth } from '$lib/auth.svelte';
 				{/each}
 			</div>
 
-			<div class="overall-quiz-section">
-				<h2>Final Quiz</h2>
-				<p class="roadmap-hint">
-					Finished going through the roadmap? Test yourself across all of it.
-				</p>
-
-				{#if !overallQuiz}
-					<button
-						class="ai-action-btn overall-quiz-btn"
-						disabled={overallQuizLoading}
-						onclick={runOverallQuiz}
-					>
-						{overallQuizLoading ? 'Generating quiz…' : 'Take Full Quiz (10-15 questions)'}
-					</button>
-					{#if overallQuizError}
-						<p class="ai-error">{overallQuizError}</p>
-					{/if}
-				{:else}
-					{@const question = overallQuiz[overallQuizIndex]}
-					{@const selected = overallQuizSelected.get(overallQuizIndex)}
-					<div class="ai-panel overall-quiz-panel" transition:slide={{ duration: 200 }}>
-						<button class="ai-panel-close" aria-label="Close quiz" onclick={closeOverallQuiz}>
-							×
-						</button>
-						<div class="quiz-header">
-							<strong>Full Video Quiz</strong>
-							<span class="quiz-progress">
-								Question {overallQuizIndex + 1} of {overallQuiz.length}
-							</span>
-						</div>
-						{#if question.difficulty}
-							<span class="difficulty-badge difficulty-{question.difficulty}">
-								{question.difficulty}
-							</span>
-						{/if}
-						<div class="quiz-question">{@render quizText(question.question)}</div>
-						<div class="quiz-options">
-							{#each question.options as option, idx}
-								<button
-									class="quiz-option"
-									class:correct={selected !== undefined && idx === question.answer_index}
-									class:incorrect={selected === idx && idx !== question.answer_index}
-									disabled={selected !== undefined}
-									onclick={() => selectOverallOption(overallQuizIndex, idx)}
-								>
-									{@render quizText(option)}
-								</button>
-							{/each}
-						</div>
-						{#if selected !== undefined}
-							<div class="quiz-explanation">{@render quizText(question.explanation)}</div>
-							{#if overallQuizIndex + 1 < overallQuiz.length}
-								<button class="quiz-next-btn" onclick={nextOverallQuestion}>
-									Next question →
-								</button>
-							{:else}
-								{@const correctCount = [...overallQuizSelected.entries()].filter(
-									([qIdx, sel]) => overallQuiz![qIdx].answer_index === sel
-								).length}
-								<p class="quiz-done">
-									Quiz complete — you scored {correctCount} / {overallQuiz.length}.
-								</p>
-								<button class="quiz-next-btn" onclick={retakeOverallQuiz}>Retake quiz</button>
-							{/if}
-						{/if}
-					</div>
-				{/if}
-			</div>
 		</section>
 	{/if}
 
@@ -1015,6 +903,17 @@ import { auth } from '$lib/auth.svelte';
 
 	.upload-card {
 		text-align: center;
+		padding: 2.5rem 2.25rem;
+	}
+
+	.upload-card h2 {
+		font-size: 1.65rem;
+		margin: 0 0 1.25rem;
+	}
+
+	.analyze-btn {
+		padding: 0.9rem 2.5rem;
+		font-size: 1.1rem;
 	}
 
 	.card.drag-active {
@@ -1024,7 +923,8 @@ import { auth } from '$lib/auth.svelte';
 
 	.choose-video {
 		display: inline-block;
-		padding: 0.6rem 1.25rem;
+		padding: 0.8rem 1.75rem;
+		font-size: 1.05rem;
 		border: 1px solid var(--border-color);
 		border-radius: 999px;
 		cursor: pointer;
@@ -1046,6 +946,7 @@ import { auth } from '$lib/auth.svelte';
 
 	.selected-file {
 		margin: 1rem 0;
+		font-size: 1.05rem;
 		color: var(--text-secondary);
 	}
 
@@ -1055,6 +956,7 @@ import { auth } from '$lib/auth.svelte';
 		font-size: 0.85rem;
 		text-transform: uppercase;
 		letter-spacing: 0.08em;
+		font-size: 0.95rem;
 	}
 
 	.url-row {
@@ -1069,10 +971,10 @@ import { auth } from '$lib/auth.svelte';
 		min-width: 0;
 		width: 100%;
 		box-sizing: border-box;
-		padding: 0.75rem 1rem;
+		padding: 0.95rem 1.15rem;
 		border: 1px solid var(--border-color);
-		border-radius: 10px;
-		font-size: 0.95rem;
+		border-radius: 12px;
+		font-size: 1.05rem;
 		transition:
 			border-color 0.15s,
 			box-shadow 0.15s;
@@ -1151,7 +1053,7 @@ import { auth } from '$lib/auth.svelte';
 	}
 
 	.intro {
-		font-size: 1.05rem;
+		font-size: 1.15rem;
 		color: var(--text-primary);
 		line-height: 1.6;
 		background: var(--tint-bg-strong);
@@ -1170,6 +1072,7 @@ import { auth } from '$lib/auth.svelte';
 	}
 
 	.key-points li {
+		font-size: 1.05rem;
 		color: var(--text-primary);
 		line-height: 1.5;
 		background: var(--surface);
@@ -1594,110 +1497,6 @@ import { auth } from '$lib/auth.svelte';
 		border-radius: 8px;
 	}
 
-	.quiz-options {
-		display: flex;
-		flex-direction: column;
-		gap: 0.4rem;
-		margin-top: 0.5rem;
-	}
-
-	.quiz-option {
-		font-family: inherit;
-		text-align: left;
-		font-size: 0.9rem;
-		padding: 0.5rem 0.75rem;
-		border-radius: 6px;
-		border: 1px solid var(--border-color);
-		background: var(--card-bg);
-		color: var(--text-primary);
-		cursor: pointer;
-	}
-
-	.quiz-option:hover:not(:disabled) {
-		background: var(--surface-hover);
-	}
-
-	.quiz-option:disabled {
-		cursor: default;
-	}
-
-	.quiz-option.correct {
-		border-color: #2e7d32;
-		background: #eaf6ea;
-		color: #2e7d32;
-	}
-
-	.quiz-option.incorrect {
-		border-color: #c53000;
-		background: #fdeeea;
-		color: #c53000;
-	}
-
-	.quiz-explanation {
-		margin-top: 0.6rem;
-		font-size: 0.9rem;
-		color: var(--text-secondary);
-	}
-
-	.quiz-question {
-		font-size: 0.95rem;
-		color: var(--text-primary);
-	}
-
-	.quiz-code {
-		margin: 0.4rem 0;
-		padding: 0.6rem 0.75rem;
-		background: #1e1e2e;
-		color: #f2f2f2;
-		border-radius: 6px;
-		font-family: ui-monospace, 'SFMono-Regular', Menlo, Consolas, monospace;
-		font-size: 0.82rem;
-		line-height: 1.5;
-		overflow-x: auto;
-		white-space: pre;
-	}
-
-	.quiz-option .quiz-code {
-		margin: 0.3rem 0 0;
-	}
-
-	.quiz-header {
-		display: flex;
-		align-items: baseline;
-		justify-content: space-between;
-		gap: 0.5rem;
-	}
-
-	.quiz-progress {
-		font-size: 0.75rem;
-		color: var(--text-faint);
-		text-transform: none;
-		letter-spacing: normal;
-	}
-
-	.quiz-next-btn {
-		font-family: inherit;
-		margin-top: 0.75rem;
-		font-size: 0.85rem;
-		padding: 0.45rem 1rem;
-		border-radius: 8px;
-		border: none;
-		background: #ff3e00;
-		color: white;
-		cursor: pointer;
-	}
-
-	.quiz-next-btn:hover {
-		box-shadow: 0 3px 10px rgba(255, 62, 0, 0.3);
-	}
-
-	.quiz-done {
-		margin-top: 0.75rem;
-		font-size: 0.85rem;
-		color: #2e9e5b;
-		font-weight: 600;
-	}
-
 	.resources {
 		margin-top: 1rem;
 		background: var(--surface);
@@ -1740,19 +1539,12 @@ import { auth } from '$lib/auth.svelte';
 		margin-top: 0.5rem;
 	}
 
-	.overall-quiz-panel {
-		max-width: 46rem;
-		width: 100%;
-		margin: 0.75rem auto 0;
-		text-align: left;
-	}
-
 	/* --- Output language select --- */
 	.language-select-label {
 		flex: 0 0 auto;
 		display: block;
 		text-align: left;
-		font-size: 0.7rem;
+		font-size: 0.8rem;
 		color: var(--text-muted);
 		white-space: nowrap;
 	}
@@ -1765,7 +1557,7 @@ import { auth } from '$lib/auth.svelte';
 		border: 1px solid var(--border-color);
 		background: var(--card-bg);
 		color: var(--text-primary);
-		font-size: 0.78rem;
+		font-size: 0.9rem;
 		font-family: inherit;
 		box-sizing: border-box;
 	}
@@ -1853,7 +1645,7 @@ import { auth } from '$lib/auth.svelte';
 		display: flex;
 		align-items: center;
 		gap: 0.6rem;
-		font-size: 0.9rem;
+		font-size: 1rem;
 		color: var(--text-muted);
 	}
 
@@ -1869,10 +1661,14 @@ import { auth } from '$lib/auth.svelte';
 	}
 
 	.step-check {
+		flex: 0 0 auto;
 		width: 1rem;
-		text-align: center;
-		color: #2e9e5b;
-		font-weight: 700;
+		height: 1rem;
+		fill: none;
+		stroke: #2e9e5b;
+		stroke-width: 3;
+		stroke-linecap: round;
+		stroke-linejoin: round;
 	}
 
 	.full-view-link {
@@ -1880,36 +1676,10 @@ import { auth } from '$lib/auth.svelte';
 		text-decoration: none;
 	}
 
-	/* --- Quiz difficulty badge --- */
-	.difficulty-badge {
-		display: inline-block;
-		font-size: 0.7rem;
-		font-weight: 600;
-		text-transform: uppercase;
-		letter-spacing: 0.03em;
-		padding: 0.15rem 0.55rem;
-		border-radius: 999px;
-		margin: 0.4rem 0 0.2rem;
-	}
-
-	.difficulty-easy {
-		background: #eaf6ea;
-		color: #2e7d32;
-	}
-
-	.difficulty-medium {
-		background: #fff4e0;
-		color: #b06f00;
-	}
-
-	.difficulty-hard {
-		background: #fdeeea;
-		color: #c53000;
-	}
-
 	@media (max-width: 640px) {
-		.card {
-			padding: 1.25rem;
+		.card,
+		.upload-card {
+			padding: 1.5rem 1.25rem;
 			border-radius: 12px;
 		}
 

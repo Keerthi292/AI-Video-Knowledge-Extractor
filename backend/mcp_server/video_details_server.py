@@ -2,6 +2,7 @@ from mcp.server.mcpserver import MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
 
 from services import db
+from services.logging_setup import configure_app_logging
 from services.db import AuthError
 from services.downloader import (
     TranscriptUnavailableError,
@@ -9,6 +10,7 @@ from services.downloader import (
     get_video_transcript,
 )
 from services.summarizer import SummarizationError
+from services.summarizer import summarize_media as _summarize_media
 from services.summarizer import summarize_transcript as _summarize_transcript
 from services.topic_assistant import TopicAssistantError
 from services.topic_assistant import explain_topic as _explain_topic
@@ -19,6 +21,7 @@ HOST = "127.0.0.1"
 PORT = 8765
 
 mcp = MCPServer("video-details")
+configure_app_logging()
 
 
 @mcp.tool()
@@ -36,12 +39,34 @@ def fetch_video_details(url: str) -> dict:
 
 
 @mcp.tool()
-def summarize_transcript(transcript: str, target_language: str | None = None) -> dict:
+def summarize_transcript(
+    transcript: str, target_language: str | None = None, time_budget_seconds: float | None = None
+) -> dict:
     """Summarize a video transcript with Gemini into an intro, key points,
     and a learning-roadmap topic tree, optionally written in a chosen
-    target_language regardless of the transcript's own language."""
+    target_language regardless of the transcript's own language.
+    time_budget_seconds optionally caps how long Gemini may take."""
     try:
-        return _summarize_transcript(transcript, target_language)
+        return _summarize_transcript(transcript, target_language, time_budget_seconds)
+    except SummarizationError as exc:
+        raise ToolError(str(exc))
+
+
+@mcp.tool()
+def summarize_media(
+    file_uri: str,
+    mime_type: str | None = None,
+    youtube: bool = False,
+    target_language: str | None = None,
+    time_budget_seconds: float | None = None,
+) -> dict:
+    """Build the same intro/key points/roadmap as summarize_transcript, but
+    directly from a public YouTube URL (youtube=true) or a Gemini Files API
+    URI of uploaded audio/video - one Gemini call, no separate transcription
+    step. Also returns "language", the detected spoken language. Falls back
+    across Gemini models within time_budget_seconds."""
+    try:
+        return _summarize_media(file_uri, mime_type, youtube, target_language, time_budget_seconds)
     except SummarizationError as exc:
         raise ToolError(str(exc))
 

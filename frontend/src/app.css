@@ -1294,3 +1294,116 @@ a {
 	color: var(--text-primary);
 }
 
+
+/* --- Summary with the Final Quiz beside it --- */
+.summary-row {
+	display: grid;
+	grid-template-columns: minmax(0, 1fr) 17rem;
+	gap: 1rem;
+	align-items: stretch;
+	margin: 0.5rem 0 1.25rem;
+}
+
+.summary-row .intro {
+	margin: 0;
+}
+
+/* Extra specificity: beats the upload page's own .overall-quiz-section rule. */
+.summary-row > .overall-quiz-section.final-quiz-card {
+	margin: 0;
+	padding: 1rem 1.1rem;
+	border: 1px solid var(--border-soft);
+	border-top: 3px solid #ff3e00;
+	border-radius: 12px;
+	background: var(--surface);
+	text-align: left;
+	display: flex;
+	flex-direction: column;
+	justify-content: center;
+}
+
+.final-quiz-card h2 {
+	margin: 0 0 0.25rem;
+	font-size: 1.1rem;
+}
+
+.final-quiz-card .roadmap-hint {
+	margin: 0 0 0.75rem;
+}
+
+.final-quiz-card .overall-quiz-btn {
+	width: 100%;
+	margin-top: 0;
+	padding: 0.55rem 0.8rem;
+	font-size: 0.9rem;
+}
+
+/* A running quiz needs the full width, so it moves under the summary. */
+.summary-row.quiz-active {
+	grid-template-columns: minmax(0, 1fr);
+}
+
+.summary-row.quiz-active .quiz-runner {
+	margin-top: 0.25rem;
+}
+
+@media (max-width: 720px) {
+	.summary-row {
+		grid-template-columns: minmax(0, 1fr);
+	}
+}
+
+/* --- Small interactions --- */
+.done-checkbox input:checked {
+	animation: check-pop 0.35s ease-out;
+}
+
+@keyframes check-pop {
+	50% {
+		transform: scale(1.35);
+	}
+}
+
+.quiz-runner .quiz-option {
+	transition:
+		background 0.15s,
+		border-color 0.15s,
+		transform 0.1s;
+}
+
+.quiz-runner .quiz-option:hover:not(:disabled) {
+	transform: translateX(3px);
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.done-checkbox input:checked {
+		animation: none;
+	}
+}
+
+/* Theme toggle line icons */
+.theme-icon {
+	width: 1.15rem;
+	height: 1.15rem;
+	display: block;
+	fill: none;
+	stroke: currentColor;
+	stroke-width: 2;
+	stroke-linecap: round;
+	stroke-linejoin: round;
+}
+
+.theme-toggle {
+	display: grid;
+	place-items: center;
+	color: var(--text-secondary);
+}
+
+/* Logo above the page title */
+.header-logo {
+	display: block;
+	width: clamp(3.5rem, 10vw, 4.5rem);
+	height: auto;
+	margin: 0 auto 0.85rem;
+	filter: drop-shadow(0 8px 18px color-mix(in srgb, #ff3e00 30%, transparent));
+}

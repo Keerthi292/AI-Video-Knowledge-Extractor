@@ -73,6 +73,37 @@ class VideoDetailsMCPClient:
             "summarize_transcript", {"transcript": transcript, "target_language": target_language}
         )
 
+    async def summarize_transcript_within(
+        self, transcript: str, target_language: str | None, time_budget_seconds: float
+    ) -> dict:
+        return await self._call(
+            "summarize_transcript",
+            {
+                "transcript": transcript,
+                "target_language": target_language,
+                "time_budget_seconds": time_budget_seconds,
+            },
+        )
+
+    async def summarize_media(
+        self,
+        file_uri: str,
+        mime_type: str | None,
+        youtube: bool,
+        target_language: str | None,
+        time_budget_seconds: float,
+    ) -> dict:
+        return await self._call(
+            "summarize_media",
+            {
+                "file_uri": file_uri,
+                "mime_type": mime_type,
+                "youtube": youtube,
+                "target_language": target_language,
+                "time_budget_seconds": time_budget_seconds,
+            },
+        )
+
     async def explain_topic(self, heading: str, content: str, example: str | None) -> dict:
         return await self._call(
             "explain_topic", {"heading": heading, "content": content, "example": example}

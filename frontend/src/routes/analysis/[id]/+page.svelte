@@ -6,6 +6,10 @@
 	import { languageLabel } from '$lib/languages';
 	import { parseCodeSegments } from '$lib/textUtils';
 	import { createQuizPrefetcher } from '$lib/quizPrefetch';
+	import { fly } from 'svelte/transition';
+	import QuizRunner from '$lib/QuizRunner.svelte';
+	import Celebration from '$lib/Celebration.svelte';
+	import { motion } from '$lib/motion';
 	import type { AnalyzeResponse, Topic, Resource, QuizQuestion, ExplainPoint } from '$lib/types';
 
 	let analysisId = $derived(page.params.id);
@@ -21,15 +25,14 @@
 	let expandedExplainPoints = new SvelteSet<string>();
 	let quizzes = new SvelteMap<string, QuizQuestion[]>();
 	let quizLoading = new SvelteSet<string>();
-	let quizIndex = new SvelteMap<string, number>();
-	let quizSelected = new SvelteMap<string, number>();
 	let copiedHeading: string | null = $state(null);
 
 	let overallQuiz: QuizQuestion[] | null = $state(null);
 	let overallQuizLoading = $state(false);
 	let overallQuizError: string | null = $state(null);
-	let overallQuizIndex = $state(0);
-	let overallQuizSelected = new SvelteMap<number, number>();
+
+	// Bumped to play the confetti when every topic is marked done.
+	let celebrateAllDone = $state(0);
 
 	let doneTopics = new SvelteSet<string>();
 	let searchQuery = $state('');
@@ -49,12 +52,8 @@
 		expandedExplainPoints.clear();
 		quizzes.clear();
 		quizLoading.clear();
-		quizIndex.clear();
-		quizSelected.clear();
 		overallQuiz = null;
 		overallQuizError = null;
-		overallQuizIndex = 0;
-		overallQuizSelected.clear();
 		doneTopics.clear();
 		searchQuery = '';
 		quizPrefetch.clear();
@@ -85,6 +84,13 @@
 			doneTopics.delete(heading);
 		} else {
 			doneTopics.add(heading);
+		}
+		if (
+			doneTopics.has(heading) &&
+			result &&
+			allTopics(result.roadmap).every((t) => doneTopics.has(t.heading))
+		) {
+			celebrateAllDone += 1;
 		}
 		try {
 			await auth.fetch(`/api/history/${result.id}/done-topics`, {
@@ -223,10 +229,11 @@
 
 	function closeQuiz(heading: string) {
 		quizzes.delete(heading);
-		quizIndex.delete(heading);
-		for (const key of [...quizSelected.keys()]) {
-			if (key.startsWith(`${heading}#`)) quizSelected.delete(key);
-		}
+	}
+
+	function retakeQuiz(topic: Topic) {
+		closeQuiz(topic.heading);
+		runQuiz(topic);
 	}
 
 	async function runQuiz(topic: Topic) {
@@ -234,29 +241,10 @@
 		quizLoading.add(topic.heading);
 		try {
 			quizzes.set(topic.heading, await quizPrefetch.take(topic));
-			quizIndex.set(topic.heading, 0);
 		} catch (err) {
 			// Leave the quiz section empty; the Quiz me button stays available to retry.
 		} finally {
 			quizLoading.delete(topic.heading);
-		}
-	}
-
-	function quizAnswerKey(heading: string, questionIndex: number) {
-		return `${heading}#${questionIndex}`;
-	}
-
-	function selectQuizOption(heading: string, questionIndex: number, optionIndex: number) {
-		const key = quizAnswerKey(heading, questionIndex);
-		if (quizSelected.has(key)) return;
-		quizSelected.set(key, optionIndex);
-	}
-
-	function nextQuizQuestion(heading: string) {
-		const total = quizzes.get(heading)?.length ?? 0;
-		const current = quizIndex.get(heading) ?? 0;
-		if (current + 1 < total) {
-			quizIndex.set(heading, current + 1);
 		}
 	}
 
@@ -273,8 +261,6 @@
 			const data = await response.json();
 			if (!response.ok) throw new Error(data.detail ?? 'Failed to generate the quiz');
 			overallQuiz = data.questions as QuizQuestion[];
-			overallQuizIndex = 0;
-			overallQuizSelected.clear();
 		} catch (err) {
 			overallQuizError = err instanceof Error ? err.message : 'Something went wrong';
 		} finally {
@@ -282,27 +268,13 @@
 		}
 	}
 
-	function selectOverallOption(questionIndex: number, optionIndex: number) {
-		if (overallQuizSelected.has(questionIndex)) return;
-		overallQuizSelected.set(questionIndex, optionIndex);
-	}
-
-	function nextOverallQuestion() {
-		const total = overallQuiz?.length ?? 0;
-		if (overallQuizIndex + 1 < total) overallQuizIndex += 1;
-	}
-
 	function closeOverallQuiz() {
 		overallQuiz = null;
 		overallQuizError = null;
-		overallQuizIndex = 0;
-		overallQuizSelected.clear();
 	}
 
 	function retakeOverallQuiz() {
 		overallQuiz = null;
-		overallQuizIndex = 0;
-		overallQuizSelected.clear();
 		runOverallQuiz();
 	}
 
@@ -311,7 +283,7 @@
 		questions.forEach((q, i) => {
 			lines.push(`${i + 1}. ${q.question}${q.difficulty ? ` _(${q.difficulty})_` : ''}`);
 			q.options.forEach((opt, idx) => {
-				const marker = idx === q.answer_index ? '**✓**' : '-';
+				const marker = idx === q.answer_index ? '- **(correct answer)**' : '-';
 				lines.push(`   ${marker} ${opt}`);
 			});
 			lines.push(`   > ${q.explanation}`, '');
@@ -322,7 +294,7 @@
 	function topicToMarkdown(topic: Topic, depth: number): string {
 		const lines: string[] = [];
 		const hashes = '#'.repeat(Math.min(depth + 2, 6));
-		lines.push(`${hashes} ${doneTopics.has(topic.heading) ? '✅ ' : ''}${topic.heading}`, '');
+		lines.push(`${hashes} ${topic.heading}${doneTopics.has(topic.heading) ? ' (done)' : ''}`, '');
 		lines.push(topic.content, '');
 		if (topic.example) {
 			lines.push('**Example:**', '```', topic.example, '```', '');
@@ -451,13 +423,14 @@
 {:else if loadError}
 	<p class="error">{loadError}</p>
 {:else if result}
-	<section class="results card">
+	<Celebration trigger={celebrateAllDone} message="You've completed every topic!" />
+	<section class="results card" in:fly|global={motion({ y: 16, duration: 350 })}>
 		<div class="results-header">
 			{#if result.detected_language}
 				<span class="language-badge">Detected language: {languageLabel(result.detected_language)}</span>
 			{/if}
-			<button class="ai-action-btn export-btn" onclick={downloadMarkdown}>⬇ Download as Markdown</button>
-			<button class="ai-action-btn" onclick={openShare}>{shareToken ? '🔗 Shared' : '🔗 Share'}</button>
+			<button class="ai-action-btn export-btn" onclick={downloadMarkdown}>Download as Markdown</button>
+			<button class="ai-action-btn" onclick={openShare}>{shareToken ? 'Shared' : 'Share'}</button>
 		</div>
 
 		{#if shareOpen}
@@ -478,12 +451,37 @@
 			</div>
 		{/if}
 
-		<p class="intro">{result.intro}</p>
+		<div class="summary-row" class:quiz-active={overallQuiz !== null}>
+			<p class="intro">{result.intro}</p>
+
+			<div class="overall-quiz-section final-quiz-card">
+				<h2>Final Quiz</h2>
+				<p class="roadmap-hint">Test yourself on the whole video — 10–15 questions.</p>
+
+				{#if !overallQuiz}
+					<button class="ai-action-btn overall-quiz-btn" disabled={overallQuizLoading} onclick={runOverallQuiz}>
+						{overallQuizLoading ? 'Generating quiz…' : 'Start Final Quiz'}
+					</button>
+					{#if overallQuizError}
+						<p class="ai-error">{overallQuizError}</p>
+					{/if}
+				{:else}
+					{#key overallQuiz}
+						<QuizRunner
+							questions={overallQuiz}
+							title="Full Video Quiz"
+							onClose={closeOverallQuiz}
+							onRetake={retakeOverallQuiz}
+						/>
+					{/key}
+				{/if}
+			</div>
+		</div>
 
 		<h2>Key Points</h2>
 		<ul class="key-points">
-			{#each result.key_points as point}
-				<li>{point}</li>
+			{#each result.key_points as point, i}
+				<li in:fly|global={motion({ y: 8, delay: 120 + i * 70, duration: 280 })}>{point}</li>
 			{/each}
 		</ul>
 
@@ -500,16 +498,6 @@
 		{/if}
 
 		<input type="search" class="topic-search" placeholder="Search roadmap topics…" bind:value={searchQuery} />
-
-		{#snippet quizText(text: string)}
-			{#each parseCodeSegments(text) as segment}
-				{#if segment.type === 'code'}
-					<pre class="quiz-code"><code>{segment.content}</code></pre>
-				{:else if segment.content.trim()}
-					<span>{segment.content}</span>
-				{/if}
-			{/each}
-		{/snippet}
 
 		{#snippet topicDetails(topic: Topic)}
 			{#if expandedTopics.has(topic.heading)}
@@ -586,48 +574,14 @@
 					{#if quizLoading.has(topic.heading)}
 						<p class="ai-loading">Generating quiz questions…</p>
 					{:else if quizzes.has(topic.heading)}
-						{@const questions = quizzes.get(topic.heading)!}
-						{@const qIndex = quizIndex.get(topic.heading) ?? 0}
-						{@const question = questions[qIndex]}
-						{@const selected = quizSelected.get(quizAnswerKey(topic.heading, qIndex))}
-						<div class="ai-panel">
-							<button class="ai-panel-close" aria-label="Close quiz" onclick={() => closeQuiz(topic.heading)}>
-								×
-							</button>
-							<div class="quiz-header">
-								<strong>Quiz</strong>
-								<span class="quiz-progress">Question {qIndex + 1} of {questions.length}</span>
-							</div>
-							{#if question.difficulty}
-								<span class="difficulty-badge difficulty-{question.difficulty}">
-									{question.difficulty}
-								</span>
-							{/if}
-							<div class="quiz-question">{@render quizText(question.question)}</div>
-							<div class="quiz-options">
-								{#each question.options as option, idx}
-									<button
-										class="quiz-option"
-										class:correct={selected !== undefined && idx === question.answer_index}
-										class:incorrect={selected === idx && idx !== question.answer_index}
-										disabled={selected !== undefined}
-										onclick={() => selectQuizOption(topic.heading, qIndex, idx)}
-									>
-										{@render quizText(option)}
-									</button>
-								{/each}
-							</div>
-							{#if selected !== undefined}
-								<div class="quiz-explanation">{@render quizText(question.explanation)}</div>
-								{#if qIndex + 1 < questions.length}
-									<button class="quiz-next-btn" onclick={() => nextQuizQuestion(topic.heading)}>
-										Next question →
-									</button>
-								{:else}
-									<p class="quiz-done">Quiz complete for this topic.</p>
-								{/if}
-							{/if}
-						</div>
+						{#key quizzes.get(topic.heading)}
+							<QuizRunner
+								questions={quizzes.get(topic.heading)!}
+								title="Quiz"
+								onClose={() => closeQuiz(topic.heading)}
+								onRetake={() => retakeQuiz(topic)}
+							/>
+						{/key}
 					{/if}
 
 					{#if topic.resources && topic.resources.length}
@@ -660,7 +614,7 @@
 		{/if}
 		<div class="roadmap">
 			{#each filteredRoadmap as topic, i}
-				<div class="roadmap-node">
+				<div class="roadmap-node" in:fly|global={motion({ y: 12, delay: Math.min(i, 8) * 60, duration: 300 })}>
 					<div class="node-marker" class:marker-active={expandedTopics.has(topic.heading)}>
 						{i + 1}
 					</div>
@@ -696,63 +650,5 @@
 			{/each}
 		</div>
 
-		<div class="overall-quiz-section">
-			<h2>Final Quiz</h2>
-			<p class="roadmap-hint">Finished going through the roadmap? Test yourself across all of it.</p>
-
-			{#if !overallQuiz}
-				<button class="ai-action-btn overall-quiz-btn" disabled={overallQuizLoading} onclick={runOverallQuiz}>
-					{overallQuizLoading ? 'Generating quiz…' : 'Take Full Quiz (10-15 questions)'}
-				</button>
-				{#if overallQuizError}
-					<p class="ai-error">{overallQuizError}</p>
-				{/if}
-			{:else}
-				{@const question = overallQuiz[overallQuizIndex]}
-				{@const selected = overallQuizSelected.get(overallQuizIndex)}
-				<div class="ai-panel overall-quiz-panel" transition:slide={{ duration: 200 }}>
-					<button class="ai-panel-close" aria-label="Close quiz" onclick={closeOverallQuiz}>×</button>
-					<div class="quiz-header">
-						<strong>Full Video Quiz</strong>
-						<span class="quiz-progress">
-							Question {overallQuizIndex + 1} of {overallQuiz.length}
-						</span>
-					</div>
-					{#if question.difficulty}
-						<span class="difficulty-badge difficulty-{question.difficulty}">
-							{question.difficulty}
-						</span>
-					{/if}
-					<div class="quiz-question">{@render quizText(question.question)}</div>
-					<div class="quiz-options">
-						{#each question.options as option, idx}
-							<button
-								class="quiz-option"
-								class:correct={selected !== undefined && idx === question.answer_index}
-								class:incorrect={selected === idx && idx !== question.answer_index}
-								disabled={selected !== undefined}
-								onclick={() => selectOverallOption(overallQuizIndex, idx)}
-							>
-								{@render quizText(option)}
-							</button>
-						{/each}
-					</div>
-					{#if selected !== undefined}
-						<div class="quiz-explanation">{@render quizText(question.explanation)}</div>
-						{#if overallQuizIndex + 1 < overallQuiz.length}
-							<button class="quiz-next-btn" onclick={nextOverallQuestion}>Next question →</button>
-						{:else}
-							{@const correctCount = [...overallQuizSelected.entries()].filter(
-								([qIdx, sel]) => overallQuiz![qIdx].answer_index === sel
-							).length}
-							<p class="quiz-done">
-								Quiz complete — you scored {correctCount} / {overallQuiz.length}.
-							</p>
-							<button class="quiz-next-btn" onclick={retakeOverallQuiz}>Retake quiz</button>
-						{/if}
-					{/if}
-				</div>
-			{/if}
-		</div>
 	</section>
 {/if}

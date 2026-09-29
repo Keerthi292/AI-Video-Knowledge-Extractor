@@ -177,3 +177,26 @@ def transcribe_youtube_url(url: str) -> tuple[str, str | None]:
         fallback_media=types.Part(file_data=types.FileData(file_uri=url)),
         media_resolution=YOUTUBE_MEDIA_RESOLUTION,
     )
+
+
+def upload_media(path: Path) -> types.File:
+    """Upload a local audio/video file to the Gemini Files API and wait until
+    it's ready, so a model can be pointed at its URI. Delete it afterwards
+    with delete_uploaded_media."""
+    client = _client()
+    try:
+        uploaded = client.files.upload(file=str(path))
+    except Exception as exc:
+        raise TranscriptionError(f"Could not upload {path.name} to Gemini: {exc}")
+    try:
+        return _wait_until_active(client, uploaded)
+    except TranscriptionError:
+        delete_uploaded_media(uploaded.name)
+        raise
+
+
+def delete_uploaded_media(name: str) -> None:
+    try:
+        _client().files.delete(name=name)
+    except Exception:
+        pass

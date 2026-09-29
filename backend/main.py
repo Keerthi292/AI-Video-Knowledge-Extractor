@@ -10,6 +10,7 @@ from pathlib import Path
 import httpx
 from dotenv import load_dotenv
 from fastapi import Depends, FastAPI, UploadFile, File, Form, Header, HTTPException
+from fastapi.exception_handlers import http_exception_handler
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
@@ -17,23 +18,21 @@ from pydantic import BaseModel
 load_dotenv()
 
 from services import db
+from services.logging_setup import configure_app_logging
 from services.audio_extractor import AudioExtractionError, extract_audio
 from services.downloader import POT_PROVIDER_BASE_URL, YTDLP_COOKIES_FILE, VideoDownloadError, download_audio
 from services.mcp_client import MCPToolError, VideoDetailsMCPClient
-from services.transcriber import TranscriptionError, transcribe_audio, transcribe_youtube_url
+from services.transcriber import (
+    TranscriptionError,
+    delete_uploaded_media,
+    transcribe_audio,
+    transcribe_youtube_url,
+    upload_media,
+)
 from services.video_search import search_youtube_videos
 
 logger = logging.getLogger(__name__)
-
-# Our own loggers (stage timings, which Gemini model answered) log at INFO;
-# give them a handler so those lines appear next to uvicorn's output.
-_log_handler = logging.StreamHandler()
-_log_handler.setFormatter(logging.Formatter("%(levelname)s:     [%(name)s] %(message)s"))
-for _logger_name in (__name__, "services"):
-    _app_logger = logging.getLogger(_logger_name)
-    _app_logger.setLevel(logging.INFO)
-    _app_logger.addHandler(_log_handler)
-    _app_logger.propagate = False
+configure_app_logging(__name__)
 
 YOUTUBE_URL_RE = re.compile(r"^https?://(www\.|m\.|music\.)?(youtube\.com|youtu\.be)/", re.IGNORECASE)
 YOUTUBE_VIDEO_ID_RE = re.compile(
@@ -77,6 +76,33 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# --- User-facing errors never name the AI provider or its models ---
+
+_PROVIDER_NAME_RE = re.compile(r"\bgoogle[ -]?gemini\b|\bgemini[-\w.]*", re.IGNORECASE)
+
+
+def public_error_message(message: str) -> str:
+    """Error text as shown to users: raw provider failures become plain
+    messages, and any provider/model name that's left is replaced with a
+    neutral "AI" (server logs keep the full detail)."""
+    if "RESOURCE_EXHAUSTED" in message or "429" in message:
+        return "The AI service's usage limit has been reached for now. Please try again later."
+    if "UNAVAILABLE" in message or "503" in message or "high demand" in message:
+        return "The AI service is busy right now. Please try again in a few minutes."
+    if "invalid JSON" in message or "request failed" in message or "returned no" in message or "malformed" in message:
+        return "The AI service had a problem with this request. Please try again."
+    return _PROVIDER_NAME_RE.sub("AI", message)
+
+
+@app.exception_handler(HTTPException)
+async def _public_http_exception_handler(request, exc: HTTPException):
+    if isinstance(exc.detail, str):
+        if _PROVIDER_NAME_RE.search(exc.detail):
+            logger.warning("Error shown to user as a generic message: %s", exc.detail)
+        exc.detail = public_error_message(exc.detail)
+    return await http_exception_handler(request, exc)
+
 
 UPLOAD_DIR = Path(__file__).parent / "uploads"
 UPLOAD_DIR.mkdir(exist_ok=True)
@@ -173,10 +199,10 @@ async def _transcribe_url_via_yt_dlp(url: str) -> tuple[str, str | None]:
 def _gemini_failure_message(exc: TranscriptionError) -> str:
     if "RESOURCE_EXHAUSTED" in str(exc):
         return (
-            "Gemini's free usage limit has been reached for now, so this YouTube video "
+            "The AI service's usage limit has been reached for now, so this YouTube video "
             "couldn't be analyzed. Please try again later (the limit resets daily)."
         )
-    return "Gemini is busy right now and couldn't analyze this YouTube video. Please try again in a few minutes."
+    return "The AI service is busy right now and couldn't analyze this YouTube video. Please try again in a few minutes."
 
 
 class TopicRequest(BaseModel):
@@ -444,9 +470,32 @@ async def analyze_video(
             audio_path.unlink(missing_ok=True)
 
 
-# --- Live progress: same pipeline as /api/analyze, streamed as Server-Sent Events ---
+# --- Live progress + time limit: streamed as Server-Sent Events ---
+#
+# Faster than /api/analyze: for YouTube links, uploads and caption-less
+# videos, Gemini watches/listens and writes the roadmap in ONE call instead of
+# first writing out a full verbatim transcript (slow, and never stored).
 
 SSE_KEEPALIVE_SECONDS = 15
+# Hard cap on a whole streamed analysis; every Gemini call only gets what's left.
+ANALYSIS_TIME_LIMIT_SECONDS = 240
+# Held back from Gemini's budget for finding related videos and saving.
+FINISHING_RESERVE_SECONDS = 20
+RESOURCES_TIME_LIMIT_SECONDS = 15
+# With less Gemini budget than this left, don't bother starting a fallback path.
+MIN_FALLBACK_SECONDS = 45
+TIME_LIMIT_MESSAGE = (
+    "The AI service is too slow right now to finish this analysis in time. "
+    "Please try again in a few minutes."
+)
+
+
+def _media_error(exc: MCPToolError) -> HTTPException:
+    message = str(exc)
+    for marker in ("GEMINI_QUOTA:", "GEMINI_BUSY:"):
+        if marker in message:
+            return HTTPException(status_code=503, detail=message.split(marker, 1)[1].strip())
+    return HTTPException(status_code=500, detail=message)
 
 
 async def _analysis_pipeline(
@@ -456,30 +505,87 @@ async def _analysis_pipeline(
     source: str,
     target_language: str | None,
     emit,
+    deadline: float,
 ) -> dict:
-    """The /api/analyze pipeline, reporting each stage through `emit(step,
-    message)`. Raises HTTPException exactly like /api/analyze does."""
-    if url:
-        transcript: str | None = None
-        detected_language: str | None = None
+    """Analyze a URL or uploaded file within `deadline` (time.monotonic()),
+    reporting each stage through `emit(step, message)`. Raises
+    HTTPException like /api/analyze does."""
 
-        gemini_error: TranscriptionError | None = None
-        if YOUTUBE_URL_RE.match(url):
-            await emit("transcribe", "Gemini is watching and transcribing the YouTube video…")
-            try:
-                transcript, detected_language = await asyncio.to_thread(transcribe_youtube_url, url)
-            except TranscriptionError as exc:
-                logger.warning("Gemini YouTube transcription failed, falling back to yt-dlp: %s", exc)
-                gemini_error = exc
+    def gemini_budget() -> float:
+        return deadline - time.monotonic() - FINISHING_RESERVE_SECONDS
 
-        if not transcript:
-            await emit("transcribe", "Reading the video's captions (or downloading its audio if there are none)…")
+    async def analyze_audio_file(path: Path) -> dict:
+        await emit("upload", "Uploading the audio…")
+        try:
+            uploaded = await asyncio.to_thread(upload_media, path)
+        except TranscriptionError as exc:
+            raise HTTPException(status_code=500, detail=str(exc))
+        try:
+            await emit("analyze", "Listening to the audio and building your roadmap…")
+            return await app.state.mcp_client.summarize_media(
+                uploaded.uri, uploaded.mime_type, False, target_language, gemini_budget()
+            )
+        except MCPToolError as exc:
+            raise _media_error(exc)
+        finally:
+            await asyncio.to_thread(delete_uploaded_media, uploaded.name)
+
+    async def analyze_via_captions_or_audio(video_url: str) -> dict:
+        await emit("captions", "Reading the video's captions…")
+        try:
+            details = await app.state.mcp_client.fetch_video_details(video_url)
+        except MCPToolError as exc:
+            message = str(exc)
+            if "VIDEO_DOWNLOAD_ERROR:" in message:
+                raise HTTPException(status_code=400, detail=message.split("VIDEO_DOWNLOAD_ERROR:", 1)[1].strip())
+            if "TRANSCRIPT_UNAVAILABLE:" not in message:
+                raise HTTPException(status_code=502, detail=f"Video details MCP tool failed: {message}")
+
+            await emit("download", "No captions found — downloading the audio…")
             try:
-                transcript, detected_language = await _transcribe_url_via_yt_dlp(url)
-            except HTTPException as exc:
-                if gemini_error is not None:
-                    raise HTTPException(status_code=503, detail=_gemini_failure_message(gemini_error)) from exc
-                raise
+                raw_audio_path = await asyncio.to_thread(download_audio, video_url, UPLOAD_DIR)
+            except VideoDownloadError as download_exc:
+                raise HTTPException(status_code=400, detail=str(download_exc))
+            audio_path: Path | None = None
+            try:
+                try:
+                    audio_path = await asyncio.to_thread(extract_audio, raw_audio_path)
+                except AudioExtractionError as extract_exc:
+                    raise HTTPException(status_code=500, detail=str(extract_exc))
+                return await analyze_audio_file(audio_path)
+            finally:
+                raw_audio_path.unlink(missing_ok=True)
+                if audio_path is not None:
+                    audio_path.unlink(missing_ok=True)
+
+        await emit("analyze", "Building your roadmap from the captions…")
+        try:
+            analysis = await app.state.mcp_client.summarize_transcript_within(
+                details["transcript"], target_language, gemini_budget()
+            )
+        except MCPToolError as exc:
+            raise HTTPException(status_code=500, detail=str(exc))
+        analysis["language"] = details.get("language")
+        return analysis
+
+    if url and YOUTUBE_URL_RE.match(url):
+        # Gemini fetches YouTube on Google's side - no bot wall, no download.
+        await emit("analyze", "Watching the video and building your roadmap…")
+        try:
+            analysis = await app.state.mcp_client.summarize_media(url, None, True, target_language, gemini_budget())
+        except MCPToolError as exc:
+            gemini_error = _media_error(exc)
+            logger.warning("Gemini YouTube analysis failed, falling back to captions: %s", exc)
+            if gemini_budget() < MIN_FALLBACK_SECONDS:
+                raise gemini_error
+            try:
+                analysis = await analyze_via_captions_or_audio(url)
+            except HTTPException as fallback_exc:
+                # On cloud hosts the fallback just hits YouTube's bot wall,
+                # which hides why the Gemini attempt failed - report that.
+                raise gemini_error from fallback_exc
+    elif url:
+        analysis = await analyze_via_captions_or_audio(url)
     else:
         await emit("extract", "Extracting audio from your video…")
         audio_path: Path | None = None
@@ -488,24 +594,23 @@ async def _analysis_pipeline(
                 audio_path = await asyncio.to_thread(extract_audio, file_path)
             except AudioExtractionError as exc:
                 raise HTTPException(status_code=500, detail=str(exc))
-
-            await emit("transcribe", "Transcribing the audio with Gemini…")
-            try:
-                transcript, detected_language = await asyncio.to_thread(transcribe_audio, audio_path)
-            except TranscriptionError as exc:
-                raise HTTPException(status_code=500, detail=str(exc))
+            analysis = await analyze_audio_file(audio_path)
         finally:
             if audio_path is not None:
                 audio_path.unlink(missing_ok=True)
 
-    await emit("summarize", "Building your learning roadmap…")
-    try:
-        analysis = await app.state.mcp_client.summarize_transcript(transcript, target_language)
-    except MCPToolError as exc:
-        raise HTTPException(status_code=500, detail=str(exc))
+    detected_language = analysis.pop("language", None)
 
     await emit("resources", "Finding related videos for each topic…")
-    await enrich_video_resources(analysis["roadmap"])
+    resources_timeout = max(1.0, min(RESOURCES_TIME_LIMIT_SECONDS, deadline - time.monotonic() - 5))
+    try:
+        await asyncio.wait_for(enrich_video_resources(analysis["roadmap"]), timeout=resources_timeout)
+    except asyncio.TimeoutError:
+        logger.warning("Related-video search hit its %.0fs limit; keeping what was found", resources_timeout)
+        # Drop the AI-suggested placeholders the search didn't get to.
+        for topic in _iter_topics(analysis["roadmap"]):
+            if topic.get("resources"):
+                topic["resources"] = [r for r in topic["resources"] if r.get("url")]
 
     await emit("save", "Saving to your history…")
     analysis_id = db.save_analysis(user["id"], source, analysis, detected_language)
@@ -574,12 +679,22 @@ async def analyze_video_stream(
 
     async def run() -> None:
         try:
-            result = await _analysis_pipeline(user, url, temp_path, source, target_language, emit)
+            result = await asyncio.wait_for(
+                _analysis_pipeline(
+                    user, url, temp_path, source, target_language, emit,
+                    deadline=started + ANALYSIS_TIME_LIMIT_SECONDS,
+                ),
+                timeout=ANALYSIS_TIME_LIMIT_SECONDS,
+            )
             log_step_done()
             logger.info("Analysis finished in %.1fs total (%s)", time.monotonic() - started, source)
             await queue.put({"type": "result", "data": result})
         except HTTPException as exc:
-            await queue.put({"type": "error", "status": exc.status_code, "detail": exc.detail})
+            detail = public_error_message(exc.detail) if isinstance(exc.detail, str) else exc.detail
+            await queue.put({"type": "error", "status": exc.status_code, "detail": detail})
+        except asyncio.TimeoutError:
+            logger.warning("Analysis hit the %ss time limit (%s)", ANALYSIS_TIME_LIMIT_SECONDS, source)
+            await queue.put({"type": "error", "status": 504, "detail": TIME_LIMIT_MESSAGE})
         except Exception:
             logger.exception("Streaming analysis failed")
             await queue.put({"type": "error", "status": 500, "detail": "Something went wrong while analyzing the video"})

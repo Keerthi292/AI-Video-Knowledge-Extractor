@@ -12,7 +12,7 @@ MODEL_NAME = "gemini-3.5-flash-lite"
 # The SDK has no default timeout; these calls normally take ~10-30s, so
 # anything past this is a stuck request - fail fast so the user can retry.
 REQUEST_TIMEOUT_MS = 90_000
-TIMEOUT_MESSAGE = "Gemini took too long to respond. Please try again."
+TIMEOUT_MESSAGE = "The AI took too long to respond. Please try again."
 
 EXPLAIN_SCHEMA = {
     "type": "object",

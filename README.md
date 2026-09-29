@@ -58,6 +58,7 @@ Every Gemini/yt-dlp call (apart from speech-to-text), and every account/history 
 |---|---|---|
 | `fetch_video_details` | `url` | Reads a video's existing captions/subtitles via `yt-dlp` — no video or audio download. Raises a distinct error if no captions exist, so the caller knows to fall back to audio transcription. |
 | `summarize_transcript` | `transcript`, `target_language?` | Sends the transcript to Gemini, gets back `intro`, `key_points`, and a nested `roadmap` of topics/sub-topics with examples. If `target_language` is set, the whole output is written in that language regardless of the transcript's own. |
+| `summarize_media` | `file_uri`, `mime_type?`, `youtube?`, `target_language?`, `time_budget_seconds?` | Faster one-call path used by the live-progress analysis: Gemini watches a YouTube URL (low frame rate/resolution, since only speech matters) or listens to uploaded audio and writes the roadmap directly — no separate transcription step. Tries several models within the time budget, skipping ones that were recently busy or out of quota. |
 | `explain_topic` | `heading`, `content`, `example?` | Asks Gemini to go deeper on one roadmap topic — context, nuance, common misconceptions — beyond what's already in `content`. |
 | `quiz_topic` | `heading`, `content`, `example?` | Gemini generates a 5-question multiple-choice quiz scoped to just that topic, difficulty-tagged, code-aware if the topic has a code example. |
 | `quiz_overall` | `roadmap`, `count` | Gemini generates a 10-15 question quiz spanning the whole roadmap, for the "Final Quiz" feature. |
@@ -137,6 +138,7 @@ sequenceDiagram
 
 - Sign up / log in — private per-account history
 - Guest mode, with **Save my work** to turn a guest into a real account without losing anything
+- **Finishes within 4 minutes** (usually 1–2): one Gemini call instead of transcribe-then-summarize, a time budget on every call, and busy models skipped
 - **Live progress** while a video is analyzed (streamed step by step over Server-Sent Events from `POST /api/analyze/stream`; falls back to `POST /api/analyze` on older backends)
 - Upload a file **or** paste a URL; YouTube links go straight to Gemini, other URLs use captions first with a Gemini speech-to-text fallback
 - Roadmap: intro, key points, nested topics with examples, related links, real related YouTube videos
