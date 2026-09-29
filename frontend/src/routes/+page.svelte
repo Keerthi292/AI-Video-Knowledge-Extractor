@@ -428,11 +428,59 @@ import { auth } from '$lib/auth.svelte';
 		uiState = videoUrl ? 'FILE_SELECTED' : 'IDLE';
 	}
 
+	// --- Live progress (streamed from /api/analyze/stream) ---
+	type ProgressEntry = { step: string; message: string };
+	let progressLog: ProgressEntry[] = $state([]);
+
+	function addProgress(entry: ProgressEntry) {
+		// A new message for the same step (e.g. falling back from Gemini to
+		// captions) replaces the old one rather than showing it as done.
+		const last = progressLog[progressLog.length - 1];
+		if (last && last.step === entry.step) {
+			progressLog[progressLog.length - 1] = entry;
+		} else {
+			progressLog.push(entry);
+		}
+	}
+
+	async function readAnalyzeStream(response: Response): Promise<AnalyzeResponse> {
+		const reader = response.body!.getReader();
+		const decoder = new TextDecoder();
+		let buffer = '';
+		while (true) {
+			const { done, value } = await reader.read();
+			if (done) break;
+			buffer += decoder.decode(value, { stream: true });
+			let sep: number;
+			while ((sep = buffer.indexOf('\n\n')) !== -1) {
+				const chunk = buffer.slice(0, sep);
+				buffer = buffer.slice(sep + 2);
+				const data = chunk
+					.split('\n')
+					.filter((line) => line.startsWith('data: '))
+					.map((line) => line.slice(6))
+					.join('\n');
+				if (!data) continue; // keep-alive comment
+				const event = JSON.parse(data);
+				if (event.type === 'progress') {
+					addProgress({ step: event.step, message: event.message });
+				} else if (event.type === 'result') {
+					return event.data as AnalyzeResponse;
+				} else if (event.type === 'error') {
+					if (event.status === 401) auth.logout();
+					throw new Error(event.detail ?? 'Analysis failed');
+				}
+			}
+		}
+		throw new Error('The connection closed before the analysis finished. Please try again.');
+	}
+
 	async function handleAnalyze() {
 		if (!selectedFile && !videoUrl) return;
 
 		uiState = 'PROCESSING';
 		errorMessage = null;
+		progressLog = [];
 
 		const formData = new FormData();
 		if (selectedFile) {
@@ -443,18 +491,31 @@ import { auth } from '$lib/auth.svelte';
 		if (targetLanguage) formData.append('target_language', targetLanguage);
 
 		try {
-			const response = await auth.fetch('/api/analyze', {
+			let response = await auth.fetch('/api/analyze/stream', {
 				method: 'POST',
 				body: formData
 			});
 
-			const data = await response.json();
-
-			if (!response.ok) {
-				throw new Error(data.detail ?? 'Analysis failed');
+			// Older backend without the streaming endpoint - use the plain one.
+			if (response.status === 404 || response.status === 405) {
+				response = await auth.fetch('/api/analyze', {
+					method: 'POST',
+					body: formData
+				});
 			}
 
-			result = data as AnalyzeResponse;
+			let data: AnalyzeResponse;
+			if (response.ok && response.headers.get('content-type')?.includes('text/event-stream')) {
+				data = await readAnalyzeStream(response);
+			} else {
+				const json = await response.json();
+				if (!response.ok) {
+					throw new Error(json.detail ?? 'Analysis failed');
+				}
+				data = json;
+			}
+
+			result = data;
 			resetResultState();
 			uiState = 'SUCCESS';
 		} catch (err) {
@@ -518,7 +579,23 @@ import { auth } from '$lib/auth.svelte';
 		</button>
 
 		{#if uiState === 'PROCESSING'}
-			<p class="status"><span class="spinner"></span> Processing video... this may take a moment.</p>
+			{#if progressLog.length}
+				<ol class="progress-steps" aria-live="polite">
+					{#each progressLog as entry, i}
+						{@const isCurrent = i === progressLog.length - 1}
+						<li class:current={isCurrent}>
+							{#if isCurrent}
+								<span class="spinner"></span>
+							{:else}
+								<span class="step-check">✓</span>
+							{/if}
+							{entry.message}
+						</li>
+					{/each}
+				</ol>
+			{:else}
+				<p class="status"><span class="spinner"></span> Processing video... this may take a moment.</p>
+			{/if}
 		{/if}
 
 		{#if uiState === 'ERROR' && errorMessage}
@@ -530,6 +607,11 @@ import { auth } from '$lib/auth.svelte';
 		<section class="results card">
 			{#if result.detected_language}
 				<span class="language-badge">Detected language: {languageLabel(result.detected_language)}</span>
+			{/if}
+			{#if result.id}
+				<a class="ai-action-btn full-view-link" href="/analysis/{result.id}">
+					Share &amp; export →
+				</a>
 			{/if}
 
 			<p class="intro">{result.intro}</p>
@@ -1740,6 +1822,42 @@ import { auth } from '$lib/auth.svelte';
 
 	.done-checkbox input {
 		cursor: pointer;
+	}
+
+	/* --- Live analysis progress --- */
+	.progress-steps {
+		list-style: none;
+		margin: 1.25rem auto 0;
+		padding: 0;
+		display: inline-flex;
+		flex-direction: column;
+		gap: 0.45rem;
+		text-align: left;
+	}
+
+	.progress-steps li {
+		display: flex;
+		align-items: center;
+		gap: 0.6rem;
+		font-size: 0.9rem;
+		color: var(--text-muted);
+	}
+
+	.progress-steps li.current {
+		color: var(--text-primary);
+		font-weight: 500;
+	}
+
+	.step-check {
+		width: 1rem;
+		text-align: center;
+		color: #2e9e5b;
+		font-weight: 700;
+	}
+
+	.full-view-link {
+		float: right;
+		text-decoration: none;
 	}
 
 	/* --- Quiz difficulty badge --- */

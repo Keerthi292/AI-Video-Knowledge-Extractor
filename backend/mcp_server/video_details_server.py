@@ -160,5 +160,48 @@ def update_done_topics(token: str, analysis_id: int, done_topics: list[str]) -> 
     return {"success": True}
 
 
+@mcp.tool()
+def upgrade_guest(token: str, email: str, password: str) -> dict:
+    """Turn the token's guest account into a real email/password account,
+    keeping all of its history. The same session token stays valid."""
+    user = _require_user(token)
+    try:
+        db.upgrade_guest_user(user["id"], email, password)
+    except AuthError as exc:
+        raise ToolError(str(exc))
+    return {"token": token, "email": email.strip().lower(), "is_guest": False}
+
+
+@mcp.tool()
+def create_share_link(token: str, analysis_id: int) -> dict:
+    """Make one of the logged-in user's analyses publicly viewable (read-only)
+    and return its share token. Reuses the existing token if already shared."""
+    user = _require_user(token)
+    share_token = db.create_share_token(user["id"], analysis_id)
+    if share_token is None:
+        raise ToolError("Analysis not found")
+    return {"share_token": share_token}
+
+
+@mcp.tool()
+def revoke_share_link(token: str, analysis_id: int) -> dict:
+    """Stop sharing one of the logged-in user's analyses; the old link stops
+    working."""
+    user = _require_user(token)
+    if not db.revoke_share_token(user["id"], analysis_id):
+        raise ToolError("Analysis not found")
+    return {"success": True}
+
+
+@mcp.tool()
+def get_shared_analysis(share_token: str) -> dict:
+    """Public read-only view of a shared analysis (no login needed). Contains
+    no account data."""
+    analysis = db.get_shared_analysis(share_token)
+    if analysis is None:
+        raise ToolError("Shared analysis not found")
+    return analysis
+
+
 if __name__ == "__main__":
     mcp.run(transport="streamable-http", host=HOST, port=PORT)

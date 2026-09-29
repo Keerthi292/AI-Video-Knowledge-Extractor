@@ -110,6 +110,18 @@ class VideoDetailsMCPClient:
             {"token": token, "analysis_id": analysis_id, "done_topics": done_topics},
         )
 
+    async def upgrade_guest(self, token: str, email: str, password: str) -> dict:
+        return await self._call("upgrade_guest", {"token": token, "email": email, "password": password})
+
+    async def create_share_link(self, token: str, analysis_id: int) -> dict:
+        return await self._call("create_share_link", {"token": token, "analysis_id": analysis_id})
+
+    async def revoke_share_link(self, token: str, analysis_id: int) -> dict:
+        return await self._call("revoke_share_link", {"token": token, "analysis_id": analysis_id})
+
+    async def get_shared_analysis(self, share_token: str) -> dict:
+        return await self._call("get_shared_analysis", {"share_token": share_token})
+
     async def close(self):
         await self._stack.aclose()
         if self._process is not None and self._process.returncode is None:

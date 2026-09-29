@@ -111,6 +111,26 @@ class AuthStore {
 		}
 	}
 
+	/** Turn the current guest account into a real one. Same account and
+	 * token, so the guest's history is kept. Returns an error message, or
+	 * null on success. */
+	async upgradeGuest(email: string, password: string): Promise<string | null> {
+		try {
+			const response = await this.fetch('/api/auth/upgrade', {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({ email, password })
+			});
+			const data = await response.json();
+			if (!response.ok) throw new Error(data.detail ?? 'Could not create your account');
+			this.email = data.email;
+			this.isGuest = false;
+			return null;
+		} catch (err) {
+			return err instanceof Error ? err.message : 'Something went wrong';
+		}
+	}
+
 	async guestLogin() {
 		this.loading = true;
 		this.error = null;

@@ -56,6 +56,9 @@
 		overallQuizSelected.clear();
 		doneTopics.clear();
 		searchQuery = '';
+		shareToken = null;
+		shareOpen = false;
+		shareError = null;
 
 		(async () => {
 			try {
@@ -64,6 +67,7 @@
 				if (!response.ok) throw new Error(data.detail ?? 'Failed to load this analysis');
 				result = data as AnalyzeResponse;
 				for (const heading of result.done_topics ?? []) doneTopics.add(heading);
+				shareToken = result.share_token ?? null;
 			} catch (err) {
 				loadError = err instanceof Error ? err.message : 'Something went wrong';
 			} finally {
@@ -373,6 +377,59 @@
 		return lines.join('\n');
 	}
 
+	// --- Public share link ---
+	let shareToken: string | null = $state(null);
+	let shareOpen = $state(false);
+	let shareBusy = $state(false);
+	let shareError: string | null = $state(null);
+	let shareCopied = $state(false);
+
+	let shareUrl = $derived(shareToken ? `${window.location.origin}/shared/${shareToken}` : '');
+
+	async function copyShareUrl() {
+		try {
+			await navigator.clipboard.writeText(shareUrl);
+			shareCopied = true;
+			setTimeout(() => (shareCopied = false), 1500);
+		} catch {
+			// clipboard API unavailable/denied - the link is still visible to copy by hand
+		}
+	}
+
+	async function openShare() {
+		shareOpen = !shareOpen;
+		if (!shareOpen || shareToken || !result?.id) return;
+		shareBusy = true;
+		shareError = null;
+		try {
+			const response = await auth.fetch(`/api/history/${result.id}/share`, { method: 'POST' });
+			const data = await response.json();
+			if (!response.ok) throw new Error(data.detail ?? 'Could not create a share link');
+			shareToken = data.share_token;
+			await copyShareUrl();
+		} catch (err) {
+			shareError = err instanceof Error ? err.message : 'Something went wrong';
+		} finally {
+			shareBusy = false;
+		}
+	}
+
+	async function stopSharing() {
+		if (!result?.id) return;
+		shareBusy = true;
+		shareError = null;
+		try {
+			const response = await auth.fetch(`/api/history/${result.id}/share`, { method: 'DELETE' });
+			if (!response.ok) throw new Error((await response.json()).detail ?? 'Could not stop sharing');
+			shareToken = null;
+			shareOpen = false;
+		} catch (err) {
+			shareError = err instanceof Error ? err.message : 'Something went wrong';
+		} finally {
+			shareBusy = false;
+		}
+	}
+
 	function downloadMarkdown() {
 		if (!result) return;
 		const markdown = buildMarkdown();
@@ -402,7 +459,26 @@
 				<span class="language-badge">Detected language: {languageLabel(result.detected_language)}</span>
 			{/if}
 			<button class="ai-action-btn export-btn" onclick={downloadMarkdown}>⬇ Download as Markdown</button>
+			<button class="ai-action-btn" onclick={openShare}>{shareToken ? '🔗 Shared' : '🔗 Share'}</button>
 		</div>
+
+		{#if shareOpen}
+			<div class="share-panel" transition:slide={{ duration: 150 }}>
+				{#if shareBusy && !shareToken}
+					<p class="ai-loading">Creating link…</p>
+				{:else if shareToken}
+					<p class="share-hint">Anyone with this link can view this roadmap (read-only, no login needed).</p>
+					<div class="share-row">
+						<input class="url-input share-input" readonly value={shareUrl} onfocus={(e) => e.currentTarget.select()} />
+						<button class="ai-action-btn" onclick={copyShareUrl}>{shareCopied ? 'Copied!' : 'Copy'}</button>
+						<button class="ai-action-btn" disabled={shareBusy} onclick={stopSharing}>Stop sharing</button>
+					</div>
+				{/if}
+				{#if shareError}
+					<p class="ai-error">{shareError}</p>
+				{/if}
+			</div>
+		{/if}
 
 		<p class="intro">{result.intro}</p>
 

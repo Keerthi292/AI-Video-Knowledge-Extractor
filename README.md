@@ -21,7 +21,7 @@ Uploaded file ──► FFmpeg (MP3) ──► Gemini STT ──► Gemini
 
 - **Frontend** (`frontend/`): SvelteKit, routes = `/` (upload), `/history`, `/analysis/[id]`, shared layout for auth/theme.
 - **Backend** (`backend/main.py`): FastAPI. Every Gemini/yt-dlp/account/history operation is proxied through one local **MCP tool server** (`backend/mcp_server/`), auto-spawned by `main.py` — except speech-to-text (`services/transcriber.py`), which FastAPI calls directly.
-- **Data**: SQLite (`backend/app.db`) — users, sessions, analyses (with per-topic done-state).
+- **Data**: SQLite (`backend/app.db`) — users, sessions, analyses (with per-topic done-state and optional share token). New tables/columns are added automatically on startup to existing databases.
 - **Docker**: `docker-compose.yml` builds both services; backend DB path is a mounted volume.
 
 ## Flow
@@ -67,6 +67,11 @@ Every Gemini/yt-dlp call (apart from speech-to-text), and every account/history 
 | `list_history` | `token` | Returns the *token owner's* saved analyses only — never another account's. |
 | `get_history_item` | `token`, `analysis_id` | Returns one saved analysis by id, scoped to the token's account; errors if it belongs to someone else. |
 | `update_done_topics` | `token`, `analysis_id`, `done_topics` | Overwrites which topics are marked done for one analysis, scoped the same way. |
+| `guest_login` | — | Creates a throwaway guest account and returns a session token (the "Skip for now" path). |
+| `upgrade_guest` | `token`, `email`, `password` | Turns a guest account into a real one in place — same user id and token, so the guest's history and progress are kept. |
+| `create_share_link` | `token`, `analysis_id` | Makes one analysis publicly viewable (read-only) and returns its share token; reuses the existing one if already shared. |
+| `revoke_share_link` | `token`, `analysis_id` | Stops sharing; the old link returns 404. |
+| `get_shared_analysis` | `share_token` | Public read-only view of a shared analysis — no login, no account data (owner, done-topics). |
 
 Every account/history tool takes a `token` as its first argument, resolves it server-side to a `user_id`, and scopes the query to that user — the token is the only thing that ties a request to an account, so one account can never read or modify another's data.
 
@@ -131,6 +136,8 @@ sequenceDiagram
 ## Features
 
 - Sign up / log in — private per-account history
+- Guest mode, with **Save my work** to turn a guest into a real account without losing anything
+- **Live progress** while a video is analyzed (streamed step by step over Server-Sent Events from `POST /api/analyze/stream`; falls back to `POST /api/analyze` on older backends)
 - Upload a file **or** paste a URL; YouTube links go straight to Gemini, other URLs use captions first with a Gemini speech-to-text fallback
 - Roadmap: intro, key points, nested topics with examples, related links, real related YouTube videos
 - Output language override (translate the roadmap regardless of source language)
@@ -139,6 +146,7 @@ sequenceDiagram
 - Search/filter roadmap topics
 - Dark mode
 - Export analysis to Markdown
+- **Share links** — public, read-only `/shared/<token>` page for any analysis; revocable
 - Docker Compose for both services
 
 ## Project Structure
@@ -157,7 +165,8 @@ sequenceDiagram
 - `routes/+layout.svelte` — theme toggle, account bar, auth gate
 - `routes/+page.svelte` — upload form
 - `routes/history/+page.svelte` — past analyses
-- `routes/analysis/[id]/+page.svelte` — roadmap, quizzes, export
+- `routes/analysis/[id]/+page.svelte` — roadmap, quizzes, export, share link
+- `routes/shared/[token]/+page.svelte` — public read-only shared roadmap (no login gate)
 - `lib/auth.svelte.ts`, `lib/theme.svelte.ts` — shared reactive state
 - `lib/types.ts`, `lib/languages.ts`, `lib/textUtils.ts` — shared helpers
 - `app.css` — all styles (shared across routes)
@@ -169,7 +178,6 @@ sequenceDiagram
 
 - No async job queues — processing is synchronous per request
 - No password reset / email verification
-- No streaming progress during analysis
 
 ## Running Locally
 

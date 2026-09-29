@@ -69,6 +69,7 @@ def init_db() -> None:
                 roadmap TEXT NOT NULL,
                 detected_language TEXT,
                 done_topics TEXT NOT NULL DEFAULT '[]',
+                share_token TEXT,
                 created_at TEXT NOT NULL
             )"""
         )
@@ -79,6 +80,11 @@ def init_db() -> None:
         columns = {row["name"] for row in cur.fetchall()}
         if "done_topics" not in columns:
             cur.execute("ALTER TABLE analyses ADD COLUMN done_topics TEXT NOT NULL DEFAULT '[]'")
+
+        # Migration for databases created before share links existed.
+        if "share_token" not in columns:
+            cur.execute("ALTER TABLE analyses ADD COLUMN share_token TEXT")
+        cur.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_analyses_share ON analyses(share_token)")
 
         # Migration for databases created before guest accounts existed.
         cur.execute("PRAGMA table_info(users)")
@@ -253,6 +259,7 @@ def get_analysis(user_id: int, analysis_id: int) -> dict | None:
         "roadmap": json.loads(row["roadmap"]),
         "detected_language": row["detected_language"],
         "done_topics": json.loads(row["done_topics"]),
+        "share_token": row["share_token"],
         "created_at": row["created_at"],
     }
 
@@ -266,3 +273,90 @@ def set_done_topics(user_id: int, analysis_id: int, done_topics: list[str]) -> b
             (json.dumps(done_topics), analysis_id, user_id),
         )
         return cur.rowcount > 0
+
+
+# --- Guest account upgrade ---
+
+
+def upgrade_guest_user(user_id: int, email: str, password: str) -> None:
+    """Turn a guest account into a real one in place - same user id, so all
+    of the guest's history and done-topics carry over, and the
+    guest's current session token stays valid."""
+    email = email.strip().lower()
+    if not EMAIL_RE.match(email):
+        raise AuthError("Enter a valid email address")
+    if len(password) < 8:
+        raise AuthError("Password must be at least 8 characters")
+
+    salt = secrets.token_hex(16)
+    password_hash = _hash_password(password, salt)
+
+    with _cursor() as cur:
+        try:
+            cur.execute(
+                """UPDATE users SET email = ?, password_hash = ?, password_salt = ?, is_guest = 0
+                   WHERE id = ? AND is_guest = 1""",
+                (email, password_hash, salt, user_id),
+            )
+        except sqlite3.IntegrityError:
+            raise AuthError("An account with that email already exists")
+        if cur.rowcount == 0:
+            raise AuthError("This account is already a full account")
+
+
+# --- Public share links ---
+
+
+def create_share_token(user_id: int, analysis_id: int) -> str | None:
+    """Return the analysis's share token, creating one if it has none yet.
+    Returns None if the analysis doesn't exist or isn't owned by this user."""
+    with _cursor() as cur:
+        cur.execute(
+            "SELECT share_token FROM analyses WHERE id = ? AND user_id = ?",
+            (analysis_id, user_id),
+        )
+        row = cur.fetchone()
+        if row is None:
+            return None
+        if row["share_token"]:
+            return row["share_token"]
+
+        token = secrets.token_urlsafe(16)
+        cur.execute(
+            "UPDATE analyses SET share_token = ? WHERE id = ? AND user_id = ?",
+            (token, analysis_id, user_id),
+        )
+        return token
+
+
+def revoke_share_token(user_id: int, analysis_id: int) -> bool:
+    with _cursor() as cur:
+        cur.execute(
+            "UPDATE analyses SET share_token = NULL WHERE id = ? AND user_id = ?",
+            (analysis_id, user_id),
+        )
+        return cur.rowcount > 0
+
+
+def get_shared_analysis(share_token: str) -> dict | None:
+    """Public, read-only view of a shared analysis. Deliberately leaves out
+    anything account-specific (owner, done-topics)."""
+    with _cursor() as cur:
+        cur.execute(
+            "SELECT source, intro, key_points, roadmap, detected_language, created_at FROM analyses WHERE share_token = ?",
+            (share_token,),
+        )
+        row = cur.fetchone()
+
+    if row is None:
+        return None
+
+    return {
+        "source": row["source"],
+        "intro": row["intro"],
+        "key_points": json.loads(row["key_points"]),
+        "roadmap": json.loads(row["roadmap"]),
+        "detected_language": row["detected_language"],
+        "created_at": row["created_at"],
+    }
+

@@ -1,4 +1,5 @@
 import asyncio
+import json
 import logging
 import re
 import uuid
@@ -9,6 +10,7 @@ import httpx
 from dotenv import load_dotenv
 from fastapi import Depends, FastAPI, UploadFile, File, Form, Header, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 load_dotenv()
@@ -406,6 +408,213 @@ async def analyze_video(
         temp_path.unlink(missing_ok=True)
         if audio_path is not None:
             audio_path.unlink(missing_ok=True)
+
+
+# --- Live progress: same pipeline as /api/analyze, streamed as Server-Sent Events ---
+
+SSE_KEEPALIVE_SECONDS = 15
+
+
+async def _analysis_pipeline(
+    user: dict,
+    url: str | None,
+    file_path: Path | None,
+    source: str,
+    target_language: str | None,
+    emit,
+) -> dict:
+    """The /api/analyze pipeline, reporting each stage through `emit(step,
+    message)`. Raises HTTPException exactly like /api/analyze does."""
+    if url:
+        transcript: str | None = None
+        detected_language: str | None = None
+
+        gemini_error: TranscriptionError | None = None
+        if YOUTUBE_URL_RE.match(url):
+            await emit("transcribe", "Gemini is watching and transcribing the YouTube video…")
+            try:
+                transcript, detected_language = await asyncio.to_thread(transcribe_youtube_url, url)
+            except TranscriptionError as exc:
+                logger.warning("Gemini YouTube transcription failed, falling back to yt-dlp: %s", exc)
+                gemini_error = exc
+
+        if not transcript:
+            await emit("transcribe", "Reading the video's captions (or downloading its audio if there are none)…")
+            try:
+                transcript, detected_language = await _transcribe_url_via_yt_dlp(url)
+            except HTTPException as exc:
+                if gemini_error is not None:
+                    raise HTTPException(status_code=503, detail=_gemini_failure_message(gemini_error)) from exc
+                raise
+    else:
+        await emit("extract", "Extracting audio from your video…")
+        audio_path: Path | None = None
+        try:
+            try:
+                audio_path = await asyncio.to_thread(extract_audio, file_path)
+            except AudioExtractionError as exc:
+                raise HTTPException(status_code=500, detail=str(exc))
+
+            await emit("transcribe", "Transcribing the audio with Gemini…")
+            try:
+                transcript, detected_language = await asyncio.to_thread(transcribe_audio, audio_path)
+            except TranscriptionError as exc:
+                raise HTTPException(status_code=500, detail=str(exc))
+        finally:
+            if audio_path is not None:
+                audio_path.unlink(missing_ok=True)
+
+    await emit("summarize", "Building your learning roadmap…")
+    try:
+        analysis = await app.state.mcp_client.summarize_transcript(transcript, target_language)
+    except MCPToolError as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+
+    await emit("resources", "Finding related videos for each topic…")
+    await enrich_video_resources(analysis["roadmap"])
+
+    await emit("save", "Saving to your history…")
+    analysis_id = db.save_analysis(user["id"], source, analysis, detected_language)
+
+    return {
+        "success": True,
+        "id": analysis_id,
+        "intro": analysis["intro"],
+        "key_points": analysis["key_points"],
+        "roadmap": analysis["roadmap"],
+        "source": source,
+        "detected_language": detected_language,
+        "done_topics": [],
+    }
+
+
+@app.post("/api/analyze/stream")
+async def analyze_video_stream(
+    file: UploadFile | None = File(None),
+    url: str | None = Form(None),
+    target_language: str | None = Form(None),
+    user: dict = Depends(get_current_user),
+):
+    """Same as /api/analyze, but responds with a text/event-stream of
+    `{"type": "progress", "step", "message"}` events while it works, then one
+    final `{"type": "result", "data"}` or `{"type": "error", "status",
+    "detail"}` event. Input validation errors are still plain HTTP errors."""
+    if not file and not url:
+        raise HTTPException(status_code=400, detail="Provide either a video file or a video URL")
+
+    if file and url:
+        raise HTTPException(status_code=400, detail="Provide only one of: video file or video URL")
+
+    temp_path: Path | None = None
+    if file:
+        extension = Path(file.filename).suffix.lower()
+        if extension not in ALLOWED_EXTENSIONS or file.content_type not in ALLOWED_CONTENT_TYPES:
+            raise HTTPException(status_code=400, detail=f"Unsupported video format: {file.filename}")
+
+        # Save the upload now - it may be closed once this handler returns
+        # the streaming response.
+        temp_path = UPLOAD_DIR / f"{uuid.uuid4()}{extension}"
+        with open(temp_path, "wb") as buffer:
+            buffer.write(await file.read())
+
+    source = url or file.filename
+    queue: asyncio.Queue[dict | None] = asyncio.Queue()
+
+    async def emit(step: str, message: str) -> None:
+        await queue.put({"type": "progress", "step": step, "message": message})
+
+    async def run() -> None:
+        try:
+            result = await _analysis_pipeline(user, url, temp_path, source, target_language, emit)
+            await queue.put({"type": "result", "data": result})
+        except HTTPException as exc:
+            await queue.put({"type": "error", "status": exc.status_code, "detail": exc.detail})
+        except Exception:
+            logger.exception("Streaming analysis failed")
+            await queue.put({"type": "error", "status": 500, "detail": "Something went wrong while analyzing the video"})
+        finally:
+            if temp_path is not None:
+                temp_path.unlink(missing_ok=True)
+            await queue.put(None)
+
+    async def events():
+        task = asyncio.create_task(run())
+        try:
+            while True:
+                try:
+                    event = await asyncio.wait_for(queue.get(), timeout=SSE_KEEPALIVE_SECONDS)
+                except asyncio.TimeoutError:
+                    # SSE comment line - keeps proxies from closing an idle
+                    # connection during long Gemini calls.
+                    yield ": keep-alive\n\n"
+                    continue
+                if event is None:
+                    break
+                yield f"data: {json.dumps(event)}\n\n"
+        finally:
+            if not task.done():
+                task.cancel()
+
+    return StreamingResponse(
+        events(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+# --- Guest account upgrade ---
+
+
+class UpgradeGuestRequest(BaseModel):
+    email: str
+    password: str
+
+
+@app.post("/api/auth/upgrade")
+async def upgrade_guest(body: UpgradeGuestRequest, authorization: str | None = Header(default=None)):
+    token = _bearer_token(authorization)
+    try:
+        return await app.state.mcp_client.upgrade_guest(token, body.email, body.password)
+    except MCPToolError as exc:
+        message = str(exc)
+        status_code = 401 if "Not authenticated" in message else 400
+        raise HTTPException(status_code=status_code, detail=message)
+
+
+# --- Public share links ---
+
+
+def _owned_resource_error(exc: MCPToolError) -> HTTPException:
+    message = str(exc)
+    status_code = 401 if "Not authenticated" in message else 404
+    return HTTPException(status_code=status_code, detail=message)
+
+
+@app.post("/api/history/{analysis_id}/share")
+async def create_share_link(analysis_id: int, authorization: str | None = Header(default=None)):
+    token = _bearer_token(authorization)
+    try:
+        return await app.state.mcp_client.create_share_link(token, analysis_id)
+    except MCPToolError as exc:
+        raise _owned_resource_error(exc)
+
+
+@app.delete("/api/history/{analysis_id}/share")
+async def revoke_share_link(analysis_id: int, authorization: str | None = Header(default=None)):
+    token = _bearer_token(authorization)
+    try:
+        return await app.state.mcp_client.revoke_share_link(token, analysis_id)
+    except MCPToolError as exc:
+        raise _owned_resource_error(exc)
+
+
+@app.get("/api/shared/{share_token}")
+async def shared_analysis(share_token: str):
+    """Public - no login required."""
+    try:
+        return await app.state.mcp_client.get_shared_analysis(share_token)
+    except MCPToolError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
 
 
 if __name__ == "__main__":

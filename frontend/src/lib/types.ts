@@ -22,6 +22,7 @@ export type AnalyzeResponse = {
 	source?: string;
 	detected_language?: string | null;
 	done_topics?: string[];
+	share_token?: string | null;
 };
 
 export type QuizQuestion = {
@@ -47,3 +48,14 @@ export type HistoryEntry = {
 };
 
 export type TextSegment = { type: 'text' | 'code'; content: string };
+
+export type AnalyzeProgressEvent = { type: 'progress'; step: string; message: string };
+
+export type SharedAnalysis = {
+	source: string;
+	intro: string;
+	key_points: string[];
+	roadmap: Topic[];
+	detected_language?: string | null;
+	created_at: string;
+};
