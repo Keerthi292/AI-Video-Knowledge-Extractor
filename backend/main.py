@@ -25,6 +25,26 @@ from services.video_search import search_youtube_videos
 logger = logging.getLogger(__name__)
 
 YOUTUBE_URL_RE = re.compile(r"^https?://(www\.|m\.|music\.)?(youtube\.com|youtu\.be)/", re.IGNORECASE)
+YOUTUBE_VIDEO_ID_RE = re.compile(
+    r"^https?://(?:www\.|m\.|music\.)?(?:youtube\.com/(?:watch\?(?:.*&)?v=|shorts/|live/|embed/)|youtu\.be/)"
+    r"([A-Za-z0-9_-]{11})",
+    re.IGNORECASE,
+)
+
+
+def normalize_video_url(url: str) -> str:
+    """Accept URLs pasted without a scheme ("youtube.com/watch?v=..."), and
+    reduce any YouTube link (youtu.be, shorts, tracking params like xstg/si)
+    to the canonical watch URL. Without this, a scheme-less YouTube link
+    skips the Gemini path and goes straight to yt-dlp, which YouTube
+    bot-walls."""
+    url = url.strip()
+    if not re.match(r"^[a-z][a-z0-9+.-]*://", url, re.IGNORECASE):
+        url = f"https://{url}"
+    match = YOUTUBE_VIDEO_ID_RE.match(url)
+    if match:
+        return f"https://www.youtube.com/watch?v={match.group(1)}"
+    return url
 
 
 @asynccontextmanager
@@ -314,6 +334,9 @@ async def analyze_video(
         raise HTTPException(status_code=400, detail="Provide only one of: video file or video URL")
 
     if url:
+        url = normalize_video_url(url)
+
+    if url:
         transcript: str | None = None
         detected_language: str | None = None
 
@@ -504,6 +527,9 @@ async def analyze_video_stream(
 
     if file and url:
         raise HTTPException(status_code=400, detail="Provide only one of: video file or video URL")
+
+    if url:
+        url = normalize_video_url(url)
 
     temp_path: Path | None = None
     if file:
