@@ -3,6 +3,7 @@
 import { auth } from '$lib/auth.svelte';
 	import { SvelteSet, SvelteMap } from 'svelte/reactivity';
 	import { slide } from 'svelte/transition';
+	import { createQuizPrefetcher } from '$lib/quizPrefetch';
 
 	type UiState = 'IDLE' | 'FILE_SELECTED' | 'PROCESSING' | 'SUCCESS' | 'ERROR';
 
@@ -102,6 +103,7 @@ import { auth } from '$lib/auth.svelte';
 		overallQuizIndex = 0;
 		overallQuizSelected.clear();
 		searchQuery = '';
+		quizPrefetch.clear();
 		loadDoneTopics();
 	}
 
@@ -228,11 +230,18 @@ import { auth } from '$lib/auth.svelte';
 		return 'topic-' + heading.toLowerCase().replace(/[^a-z0-9]+/g, '-');
 	}
 
+	// Generates each opened topic's quiz in the background so "Quiz me" is
+	// usually instant.
+	const quizPrefetch = createQuizPrefetcher();
+
 	function toggleTopic(heading: string) {
 		if (expandedTopics.has(heading)) {
 			expandedTopics.delete(heading);
+			quizPrefetch.cancel(heading);
 		} else {
 			expandedTopics.add(heading);
+			const topic = result ? allTopics(result.roadmap).find((t) => t.heading === heading) : undefined;
+			if (topic && !quizzes.has(heading)) quizPrefetch.schedule(topic);
 		}
 	}
 
@@ -305,18 +314,7 @@ import { auth } from '$lib/auth.svelte';
 		if (quizLoading.has(topic.heading) || quizzes.has(topic.heading)) return;
 		quizLoading.add(topic.heading);
 		try {
-			const response = await auth.fetch('/api/topic/quiz', {
-				method: 'POST',
-				headers: { 'Content-Type': 'application/json' },
-				body: JSON.stringify({
-					heading: topic.heading,
-					content: topic.content,
-					example: topic.example ?? null
-				})
-			});
-			const data = await response.json();
-			if (!response.ok) throw new Error(data.detail ?? 'Failed to generate a quiz');
-			quizzes.set(topic.heading, data.questions as QuizQuestion[]);
+			quizzes.set(topic.heading, await quizPrefetch.take(topic));
 			quizIndex.set(topic.heading, 0);
 		} catch (err) {
 			// Leave the quiz section empty; the Quiz me button stays available to retry.
@@ -429,18 +427,29 @@ import { auth } from '$lib/auth.svelte';
 	}
 
 	// --- Live progress (streamed from /api/analyze/stream) ---
-	type ProgressEntry = { step: string; message: string };
+	type ProgressEntry = { step: string; message: string; startedAt: number; seconds?: number };
 	let progressLog: ProgressEntry[] = $state([]);
+	let progressNow = $state(Date.now());
 
-	function addProgress(entry: ProgressEntry) {
+	// Tick once a second while processing, for the current step's live timer.
+	$effect(() => {
+		if (uiState !== 'PROCESSING') return;
+		const timer = setInterval(() => (progressNow = Date.now()), 1000);
+		return () => clearInterval(timer);
+	});
+
+	function addProgress(entry: { step: string; message: string }) {
 		// A new message for the same step (e.g. falling back from Gemini to
 		// captions) replaces the old one rather than showing it as done.
+		const now = Date.now();
 		const last = progressLog[progressLog.length - 1];
 		if (last && last.step === entry.step) {
-			progressLog[progressLog.length - 1] = entry;
+			last.message = entry.message;
 		} else {
-			progressLog.push(entry);
+			if (last) last.seconds = Math.round((now - last.startedAt) / 1000);
+			progressLog.push({ ...entry, startedAt: now });
 		}
+		progressNow = now;
 	}
 
 	async function readAnalyzeStream(response: Response): Promise<AnalyzeResponse> {
@@ -590,6 +599,11 @@ import { auth } from '$lib/auth.svelte';
 								<span class="step-check">✓</span>
 							{/if}
 							{entry.message}
+							<span class="step-time">
+								{isCurrent
+									? `${Math.max(0, Math.round((progressNow - entry.startedAt) / 1000))}s`
+									: `${entry.seconds}s`}
+							</span>
 						</li>
 					{/each}
 				</ol>
@@ -1846,6 +1860,12 @@ import { auth } from '$lib/auth.svelte';
 	.progress-steps li.current {
 		color: var(--text-primary);
 		font-weight: 500;
+	}
+
+	.step-time {
+		font-size: 0.8rem;
+		color: var(--text-faint);
+		font-variant-numeric: tabular-nums;
 	}
 
 	.step-check {

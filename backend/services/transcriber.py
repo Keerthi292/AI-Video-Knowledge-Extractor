@@ -24,6 +24,16 @@ TRANSCRIPTION_MODELS = (
 TRANSCRIPTION_ROUNDS = 2
 TRANSCRIPTION_RETRY_DELAY_SECONDS = 10
 
+# Upper bound on a single model attempt. Without it a stuck request hangs
+# forever (the SDK has no default timeout); long videos legitimately take a
+# few minutes to transcribe, so this is generous.
+ATTEMPT_TIMEOUT_MS = 300_000
+
+# Only the speech matters, so have Gemini sample YouTube video frames rarely
+# and at low resolution - far fewer tokens to process per minute of video.
+YOUTUBE_FRAMES_PER_SECOND = 0.2
+YOUTUBE_MEDIA_RESOLUTION = types.MediaResolution.MEDIA_RESOLUTION_LOW
+
 # Gemini processes uploaded audio asynchronously; poll until it's ready.
 FILE_READY_TIMEOUT_SECONDS = 120
 FILE_READY_POLL_INTERVAL_SECONDS = 2
@@ -66,29 +76,61 @@ def _client() -> genai.Client:
     return genai.Client(api_key=api_key)
 
 
-def _transcribe(client: genai.Client, media: types.Part, source: str) -> tuple[str, str | None]:
+def _generate(
+    client: genai.Client, model: str, media: types.Part, media_resolution: types.MediaResolution | None
+) -> dict:
+    response = client.models.generate_content(
+        model=model,
+        contents=types.Content(parts=[media, types.Part(text=PROMPT)]),
+        config=types.GenerateContentConfig(
+            response_mime_type="application/json",
+            response_schema=RESPONSE_SCHEMA,
+            media_resolution=media_resolution,
+            http_options=types.HttpOptions(timeout=ATTEMPT_TIMEOUT_MS),
+        ),
+    )
+    return json.loads(response.text)
+
+
+def _transcribe(
+    client: genai.Client,
+    media: types.Part,
+    source: str,
+    fallback_media: types.Part | None = None,
+    media_resolution: types.MediaResolution | None = None,
+) -> tuple[str, str | None]:
+    """`media`/`media_resolution` are the preferred (cheaper) request; if a
+    model rejects them as invalid, that model is retried once with plain
+    `fallback_media` and default resolution."""
     errors = []
+    started = time.monotonic()
     for round_number in range(TRANSCRIPTION_ROUNDS):
         if round_number:
             time.sleep(TRANSCRIPTION_RETRY_DELAY_SECONDS)
         for model in TRANSCRIPTION_MODELS:
+            attempt_started = time.monotonic()
             try:
-                response = client.models.generate_content(
-                    model=model,
-                    contents=types.Content(parts=[media, types.Part(text=PROMPT)]),
-                    config=types.GenerateContentConfig(
-                        response_mime_type="application/json",
-                        response_schema=RESPONSE_SCHEMA,
-                    ),
-                )
-                result = json.loads(response.text)
+                try:
+                    result = _generate(client, model, media, media_resolution)
+                except Exception as exc:
+                    if fallback_media is None or "INVALID_ARGUMENT" not in str(exc):
+                        raise
+                    logger.warning("%s rejected the low-cost video settings, retrying without them: %s", model, exc)
+                    result = _generate(client, model, fallback_media, None)
             except Exception as exc:
-                logger.warning("Transcription with %s failed for %s: %s", model, source, exc)
+                logger.warning(
+                    "Transcription with %s failed after %.1fs for %s: %s",
+                    model, time.monotonic() - attempt_started, source, exc,
+                )
                 errors.append(f"{model}: {exc}")
                 continue
 
             text = (result.get("transcript") or "").strip()
             language = (result.get("language") or "").strip().lower() or None
+            logger.info(
+                "Transcribed %s with %s in %.1fs (%.1fs total incl. %d failed attempt(s))",
+                source, model, time.monotonic() - attempt_started, time.monotonic() - started, len(errors),
+            )
             return text, language
 
     raise TranscriptionError(f"Gemini failed to transcribe {source}: {'; '.join(errors)}")
@@ -125,4 +167,13 @@ def transcribe_youtube_url(url: str) -> tuple[str, str | None]:
     Google fetches the video on its side, so this works from cloud hosts
     whose IPs YouTube bot-walls for yt-dlp - no cookies or PO tokens needed.
     """
-    return _transcribe(_client(), types.Part(file_data=types.FileData(file_uri=url)), url)
+    return _transcribe(
+        _client(),
+        types.Part(
+            file_data=types.FileData(file_uri=url),
+            video_metadata=types.VideoMetadata(fps=YOUTUBE_FRAMES_PER_SECOND),
+        ),
+        url,
+        fallback_media=types.Part(file_data=types.FileData(file_uri=url)),
+        media_resolution=YOUTUBE_MEDIA_RESOLUTION,
+    )

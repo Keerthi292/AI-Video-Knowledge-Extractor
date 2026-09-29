@@ -1,10 +1,15 @@
 import json
 import os
 
+import httpx
 from google import genai
 from google.genai import types
 
 MODEL_NAME = "gemini-3.5-flash-lite"
+
+# The SDK has no default timeout, so a stuck request would hang the whole
+# analysis. A long roadmap can legitimately take a couple of minutes.
+REQUEST_TIMEOUT_MS = 240_000
 
 TOPIC_PROPERTIES = {
     "heading": {"type": "string"},
@@ -134,8 +139,11 @@ def summarize_transcript(transcript: str, target_language: str | None = None) ->
             config=types.GenerateContentConfig(
                 response_mime_type="application/json",
                 response_schema=RESPONSE_SCHEMA,
+                http_options=types.HttpOptions(timeout=REQUEST_TIMEOUT_MS),
             ),
         )
+    except httpx.TimeoutException:
+        raise SummarizationError("Gemini took too long to build the roadmap. Please try again.")
     except Exception as exc:
         raise SummarizationError(f"Gemini request failed: {exc}")
 

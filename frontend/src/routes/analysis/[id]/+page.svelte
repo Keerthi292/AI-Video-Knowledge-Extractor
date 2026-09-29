@@ -5,6 +5,7 @@
 	import { auth } from '$lib/auth.svelte';
 	import { languageLabel } from '$lib/languages';
 	import { parseCodeSegments } from '$lib/textUtils';
+	import { createQuizPrefetcher } from '$lib/quizPrefetch';
 	import type { AnalyzeResponse, Topic, Resource, QuizQuestion, ExplainPoint } from '$lib/types';
 
 	let analysisId = $derived(page.params.id);
@@ -56,6 +57,7 @@
 		overallQuizSelected.clear();
 		doneTopics.clear();
 		searchQuery = '';
+		quizPrefetch.clear();
 		shareToken = null;
 		shareOpen = false;
 		shareError = null;
@@ -147,11 +149,18 @@
 		return 'topic-' + heading.toLowerCase().replace(/[^a-z0-9]+/g, '-');
 	}
 
+	// Generates each opened topic's quiz in the background so "Quiz me" is
+	// usually instant.
+	const quizPrefetch = createQuizPrefetcher();
+
 	function toggleTopic(heading: string) {
 		if (expandedTopics.has(heading)) {
 			expandedTopics.delete(heading);
+			quizPrefetch.cancel(heading);
 		} else {
 			expandedTopics.add(heading);
+			const topic = result ? allTopics(result.roadmap).find((t) => t.heading === heading) : undefined;
+			if (topic && !quizzes.has(heading)) quizPrefetch.schedule(topic);
 		}
 	}
 
@@ -224,18 +233,7 @@
 		if (quizLoading.has(topic.heading) || quizzes.has(topic.heading)) return;
 		quizLoading.add(topic.heading);
 		try {
-			const response = await auth.fetch('/api/topic/quiz', {
-				method: 'POST',
-				headers: { 'Content-Type': 'application/json' },
-				body: JSON.stringify({
-					heading: topic.heading,
-					content: topic.content,
-					example: topic.example ?? null
-				})
-			});
-			const data = await response.json();
-			if (!response.ok) throw new Error(data.detail ?? 'Failed to generate a quiz');
-			quizzes.set(topic.heading, data.questions as QuizQuestion[]);
+			quizzes.set(topic.heading, await quizPrefetch.take(topic));
 			quizIndex.set(topic.heading, 0);
 		} catch (err) {
 			// Leave the quiz section empty; the Quiz me button stays available to retry.

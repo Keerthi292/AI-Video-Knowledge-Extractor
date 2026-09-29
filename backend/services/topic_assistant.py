@@ -3,10 +3,16 @@
 import json
 import os
 
+import httpx
 from google import genai
 from google.genai import types
 
 MODEL_NAME = "gemini-3.5-flash-lite"
+
+# The SDK has no default timeout; these calls normally take ~10-30s, so
+# anything past this is a stuck request - fail fast so the user can retry.
+REQUEST_TIMEOUT_MS = 90_000
+TIMEOUT_MESSAGE = "Gemini took too long to respond. Please try again."
 
 EXPLAIN_SCHEMA = {
     "type": "object",
@@ -145,8 +151,11 @@ def explain_topic(heading: str, content: str, example: str | None) -> list[dict]
             config=types.GenerateContentConfig(
                 response_mime_type="application/json",
                 response_schema=EXPLAIN_SCHEMA,
+                http_options=types.HttpOptions(timeout=REQUEST_TIMEOUT_MS),
             ),
         )
+    except httpx.TimeoutException:
+        raise TopicAssistantError(TIMEOUT_MESSAGE)
     except Exception as exc:
         raise TopicAssistantError(f"Gemini request failed: {exc}")
 
@@ -172,8 +181,11 @@ def _generate_quiz(prompt: str) -> list[dict]:
             config=types.GenerateContentConfig(
                 response_mime_type="application/json",
                 response_schema=QUIZ_SCHEMA,
+                http_options=types.HttpOptions(timeout=REQUEST_TIMEOUT_MS),
             ),
         )
+    except httpx.TimeoutException:
+        raise TopicAssistantError(TIMEOUT_MESSAGE)
     except Exception as exc:
         raise TopicAssistantError(f"Gemini request failed: {exc}")
 

@@ -2,6 +2,7 @@ import asyncio
 import json
 import logging
 import re
+import time
 import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -23,6 +24,16 @@ from services.transcriber import TranscriptionError, transcribe_audio, transcrib
 from services.video_search import search_youtube_videos
 
 logger = logging.getLogger(__name__)
+
+# Our own loggers (stage timings, which Gemini model answered) log at INFO;
+# give them a handler so those lines appear next to uvicorn's output.
+_log_handler = logging.StreamHandler()
+_log_handler.setFormatter(logging.Formatter("%(levelname)s:     [%(name)s] %(message)s"))
+for _logger_name in (__name__, "services"):
+    _app_logger = logging.getLogger(_logger_name)
+    _app_logger.setLevel(logging.INFO)
+    _app_logger.addHandler(_log_handler)
+    _app_logger.propagate = False
 
 YOUTUBE_URL_RE = re.compile(r"^https?://(www\.|m\.|music\.)?(youtube\.com|youtu\.be)/", re.IGNORECASE)
 YOUTUBE_VIDEO_ID_RE = re.compile(
@@ -545,13 +556,27 @@ async def analyze_video_stream(
 
     source = url or file.filename
     queue: asyncio.Queue[dict | None] = asyncio.Queue()
+    started = time.monotonic()
+    current_step: dict = {"name": None, "started": started}
+
+    def log_step_done() -> None:
+        if current_step["name"]:
+            logger.info(
+                "Analysis step %r took %.1fs (%s)",
+                current_step["name"], time.monotonic() - current_step["started"], source,
+            )
 
     async def emit(step: str, message: str) -> None:
+        if step != current_step["name"]:
+            log_step_done()
+            current_step.update(name=step, started=time.monotonic())
         await queue.put({"type": "progress", "step": step, "message": message})
 
     async def run() -> None:
         try:
             result = await _analysis_pipeline(user, url, temp_path, source, target_language, emit)
+            log_step_done()
+            logger.info("Analysis finished in %.1fs total (%s)", time.monotonic() - started, source)
             await queue.put({"type": "result", "data": result})
         except HTTPException as exc:
             await queue.put({"type": "error", "status": exc.status_code, "detail": exc.detail})
