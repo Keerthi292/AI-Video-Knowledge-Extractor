@@ -1,6 +1,13 @@
 import { goto } from '$app/navigation';
 import { API_BASE } from './api';
 
+// fetch() throws a TypeError ("Failed to fetch") when the server can't be
+// reached at all - say that plainly.
+function authErrorMessage(err: unknown): string {
+	if (err instanceof TypeError) return "Can't reach the server. Please check it's running and try again.";
+	return err instanceof Error ? err.message : 'Something went wrong';
+}
+
 class AuthStore {
 	token: string | null = $state(null);
 	email: string | null = $state(null);
@@ -105,7 +112,7 @@ class AuthStore {
 			this.set(data.token, data.email);
 			this.passwordInput = '';
 		} catch (err) {
-			this.error = err instanceof Error ? err.message : 'Something went wrong';
+			this.error = authErrorMessage(err);
 		} finally {
 			this.loading = false;
 		}
@@ -140,7 +147,7 @@ class AuthStore {
 			if (!response.ok) throw new Error(data.detail ?? 'Could not start a guest session');
 			this.set(data.token, data.email, data.is_guest);
 		} catch (err) {
-			this.error = err instanceof Error ? err.message : 'Something went wrong';
+			this.error = authErrorMessage(err);
 		} finally {
 			this.loading = false;
 		}
