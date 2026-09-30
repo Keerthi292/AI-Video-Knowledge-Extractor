@@ -4,31 +4,21 @@ Turns a video (file or URL) into an interactive learning roadmap — intro, key 
 
 ## Architecture
 
-```
-┌──────────────────────────────────────────────┐
-│                USER (browser)                │
-└──────────────────────┬───────────────────────┘
-                       │
-┌──────────────────────▼───────────────────────┐
-│  FRONTEND  ·  SvelteKit                      │
-│  upload · results · history · shared links   │
-└──────────────────────┬───────────────────────┘
-                       │  HTTP (JSON)  +  live progress (SSE)
-┌──────────────────────▼───────────────────────┐
-│  BACKEND  ·  FastAPI                         │
-│  routes · login check · analysis steps       │
-└───────────┬──────────────────────┬───────────┘
-            │ MCP                  │ direct
-┌───────────▼───────────┐  ┌───────▼────────────────┐
-│  MCP TOOL SERVER      │  │  yt-dlp  ·  FFmpeg     │
-│  AI + account +       │  │  audio, related videos │
-│  history tools        │  │                        │
-└─────┬───────────┬─────┘  └────────────────────────┘
-      │           │
-┌─────▼─────┐ ┌───▼───────┐
-│  Gemini   │ │  SQLite   │
-│  (AI)     │ │  database │
-└───────────┘ └───────────┘
+```mermaid
+flowchart TD
+    A[Log in / Skip for now] --> B[Upload a file or paste a link]
+    B --> C{Input type?}
+    C -- YouTube link --> D[Gemini watches the video]
+    C -- Other link --> E[Read captions or download audio]
+    C -- File --> F[Extract audio with FFmpeg]
+    E --> G[Gemini reads the captions or listens to the audio]
+    F --> G
+    D --> H[Roadmap: intro, key points, topics]
+    G --> H
+    H --> I[Find related videos and save to history]
+    I --> J[Results page]
+    J --> K[Explain / Quiz me / Final Quiz]
+    J --> L[Mark done / Share / History]
 ```
 
 - **Frontend** (`frontend/`): SvelteKit, routes = `/` (upload), `/history`, `/analysis/[id]`, shared layout for auth/theme.
