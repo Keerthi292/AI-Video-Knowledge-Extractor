@@ -72,6 +72,8 @@
 	{#each parseCodeSegments(text) as segment}
 		{#if segment.type === 'code'}
 			<pre class="quiz-code"><code>{segment.content}</code></pre>
+		{:else if segment.type === 'inline'}
+			<code class="quiz-inline-code">{segment.content}</code>
 		{:else if segment.content.trim()}
 			<span>{segment.content}</span>
 		{/if}
@@ -130,12 +132,12 @@
 						{#each mistakes as m}
 							<li>
 								<div class="quiz-question">{@render quizText(m.q.question)}</div>
-								<p class="mistake-answer wrong-answer">
+								<div class="mistake-answer wrong-answer">
 									Your answer: {@render quizText(m.q.options[m.answer!])}
-								</p>
-								<p class="mistake-answer right-answer">
+								</div>
+								<div class="mistake-answer right-answer">
 									Correct: {@render quizText(m.q.options[m.q.answer_index])}
-								</p>
+								</div>
 								<div class="quiz-explanation">{@render quizText(m.q.explanation)}</div>
 							</li>
 						{/each}
@@ -269,6 +271,17 @@
 
 	.quiz-feedback.right {
 		color: #2e9e5b;
+	}
+
+	/* Brighter feedback colours on the dark theme's background. */
+	:global(:root[data-theme='dark']) .quiz-feedback,
+	:global(:root[data-theme='dark']) .wrong-answer {
+		color: #ff9a7a;
+	}
+
+	:global(:root[data-theme='dark']) .quiz-feedback.right,
+	:global(:root[data-theme='dark']) .right-answer {
+		color: #7ee2a8;
 	}
 
 	.quiz-results {

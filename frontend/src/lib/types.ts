@@ -47,7 +47,7 @@ export type HistoryEntry = {
 	total_count: number;
 };
 
-export type TextSegment = { type: 'text' | 'code'; content: string };
+export type TextSegment = { type: 'text' | 'code' | 'inline'; content: string };
 
 export type AnalyzeProgressEvent = { type: 'progress'; step: string; message: string };
 

@@ -1407,3 +1407,57 @@ a {
 	margin: 0 auto 0.85rem;
 	filter: drop-shadow(0 8px 18px color-mix(in srgb, #ff3e00 30%, transparent));
 }
+
+/* --- Quiz readability: answered options, code blocks, dark mode --- */
+
+/* Beats the global button:disabled grey, so options you didn't pick stay readable. */
+.quiz-option:disabled {
+	background: var(--card-bg);
+	color: var(--text-secondary);
+}
+
+/* Re-stated after the rule above so right/wrong answers keep their colours. */
+.quiz-option.correct {
+	border-color: #2e7d32;
+	background: #eaf6ea;
+	color: #2e7d32;
+}
+
+.quiz-option.incorrect {
+	border-color: #c53000;
+	background: #fdeeea;
+	color: #c53000;
+}
+
+.quiz-option .quiz-code,
+.quiz-code {
+	font-weight: 400;
+	border: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.quiz-inline-code {
+	font-family: ui-monospace, 'SFMono-Regular', Menlo, Consolas, monospace;
+	font-size: 0.88em;
+	font-weight: 500;
+	padding: 0.1rem 0.35rem;
+	border-radius: 4px;
+	/* Tinted from the surrounding text colour, so it reads on any background. */
+	background: color-mix(in srgb, currentColor 12%, transparent);
+}
+
+:root[data-theme='dark'] .quiz-code {
+	background: #0d0d14;
+	border-color: var(--border-color);
+}
+
+:root[data-theme='dark'] .quiz-option.correct {
+	background: rgba(46, 158, 91, 0.16);
+	border-color: #2e9e5b;
+	color: #7ee2a8;
+}
+
+:root[data-theme='dark'] .quiz-option.incorrect {
+	background: rgba(255, 90, 50, 0.14);
+	border-color: #e2552e;
+	color: #ff9a7a;
+}

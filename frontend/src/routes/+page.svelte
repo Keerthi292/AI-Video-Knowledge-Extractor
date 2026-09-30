@@ -34,6 +34,7 @@ import { auth } from '$lib/auth.svelte';
 		roadmap: Topic[];
 		source?: string;
 		detected_language?: string | null;
+		done_topics?: string[];
 	};
 
 	type QuizQuestion = {
@@ -129,35 +130,25 @@ import { auth } from '$lib/auth.svelte';
 	let celebrateAllDone = $state(0);
 
 	// --- Mark topic as done ---
-	// Scoped per (account, video) so a fresh video never starts with topics
-	// already checked off from something unrelated.
+	// Saved to the server against this analysis (same as the History view), so
+	// progress shows up in History and when the analysis is reopened.
 	let doneTopics = new SvelteSet<string>();
-
-	function doneTopicsKey(): string | null {
-		const account = auth.email ?? auth.token;
-		if (!account || !result?.source) return null;
-		return `done-topics:${account}:${result.source}`;
-	}
 
 	function loadDoneTopics() {
 		doneTopics.clear();
-		const key = doneTopicsKey();
-		if (!key) return;
-		try {
-			const raw = localStorage.getItem(key);
-			if (raw) for (const heading of JSON.parse(raw) as string[]) doneTopics.add(heading);
-		} catch {
-			// ignore
-		}
+		for (const heading of result?.done_topics ?? []) doneTopics.add(heading);
 	}
 
-	function saveDoneTopics() {
-		const key = doneTopicsKey();
-		if (!key) return;
+	async function saveDoneTopics() {
+		if (!result?.id) return;
 		try {
-			localStorage.setItem(key, JSON.stringify([...doneTopics]));
+			await auth.fetch(`/api/history/${result.id}/done-topics`, {
+				method: 'PUT',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({ done_topics: [...doneTopics] })
+			});
 		} catch {
-			// ignore
+			// best-effort - the checkbox already reflects the change locally
 		}
 	}
 
