@@ -11,7 +11,7 @@
 	let { children } = $props();
 
 	// Loading screen shown once when the app opens.
-	const SPLASH_DURATION_MS = 3000;
+	const SPLASH_DURATION_MS = 4000;
 	let showSplash = $state(true);
 
 	let onHistoryPage = $derived(page.url.pathname === '/history');
