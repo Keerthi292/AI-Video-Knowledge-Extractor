@@ -3,8 +3,16 @@ services:
     build: ./backend
     ports:
       - "8000:8000"
+    # GEMINI_API_KEY is read from backend/.env (same file as local dev) or a
+    # root .env - whichever exists.
+    env_file:
+      - path: ./.env
+        required: false
+      - path: ./backend/.env
+        required: false
     environment:
-      - GEMINI_API_KEY=${GEMINI_API_KEY}
+      # The image defaults to Render's port (10000); listen where compose maps.
+      - PORT=8000
       - DB_PATH=/app/data/app.db
     volumes:
       - backend-data:/app/data
@@ -13,6 +21,9 @@ services:
     build: ./frontend
     ports:
       - "3000:3000"
+    environment:
+      # The browser calls the backend container through the host's port 8000.
+      - PUBLIC_API_URL=http://localhost:8000
     depends_on:
       - backend
 
