@@ -5,18 +5,30 @@ Turns a video (file or URL) into an interactive learning roadmap — intro, key 
 ## Architecture
 
 ```
-YouTube URL ──► Gemini STT (Google fetches the video) ───────────────────────► Gemini ─┐
-     │ (if Gemini can't)                                                               │
-     ▼                                                                                 │
-Video URL ──► MCP: fetch_video_details ─┬─ captions ─────────────────────────► Gemini ─┤
-                                         └─ no captions ─► yt-dlp audio ─► Gemini STT ─┘
-Uploaded file ──► FFmpeg (MP3) ──► Gemini STT ──► Gemini
-                                              │
-                                              ▼
-                                   Roadmap + Quizzes (MCP tools)
-                                              │
-                                              ▼
-                          SvelteKit ◄──► FastAPI ◄──► SQLite (accounts + history)
+┌──────────────────────────────────────────────┐
+│                USER (browser)                │
+└──────────────────────┬───────────────────────┘
+                       │
+┌──────────────────────▼───────────────────────┐
+│  FRONTEND  ·  SvelteKit                      │
+│  upload · results · history · shared links   │
+└──────────────────────┬───────────────────────┘
+                       │  HTTP (JSON)  +  live progress (SSE)
+┌──────────────────────▼───────────────────────┐
+│  BACKEND  ·  FastAPI                         │
+│  routes · login check · analysis steps       │
+└───────────┬──────────────────────┬───────────┘
+            │ MCP                  │ direct
+┌───────────▼───────────┐  ┌───────▼────────────────┐
+│  MCP TOOL SERVER      │  │  yt-dlp  ·  FFmpeg     │
+│  AI + account +       │  │  audio, related videos │
+│  history tools        │  │                        │
+└─────┬───────────┬─────┘  └────────────────────────┘
+      │           │
+┌─────▼─────┐ ┌───▼───────┐
+│  Gemini   │ │  SQLite   │
+│  (AI)     │ │  database │
+└───────────┘ └───────────┘
 ```
 
 - **Frontend** (`frontend/`): SvelteKit, routes = `/` (upload), `/history`, `/analysis/[id]`, shared layout for auth/theme.
@@ -28,17 +40,18 @@ Uploaded file ──► FFmpeg (MP3) ──► Gemini STT ──► Gemini
 
 ```mermaid
 flowchart TD
-    Z[Sign up / Log in] -->|MCP: signup / login| A[Upload file OR paste URL]
+    Z[Sign up / Log in / Skip for now] -->|MCP: signup / login / guest_login| A[Upload file OR paste URL]
     A --> B{Input type?}
-    B -- YouTube URL --> Y[Gemini: transcribe YouTube URL]
-    Y -- ok --> E
+    B -- YouTube URL --> Y[MCP: summarize_media<br/>Gemini watches the video]
+    Y -- ok --> K
     Y -- failed --> C
     B -- other URL --> C[MCP: fetch_video_details]
     C --> D{Captions?}
-    D -- yes --> E[Transcript]
-    D -- no --> F[yt-dlp: audio] --> G[Gemini speech-to-text] --> E
-    B -- File --> H[FFmpeg] --> I[Gemini speech-to-text] --> E
-    E --> J[MCP: summarize_transcript]
+    D -- yes --> J[MCP: summarize_transcript]
+    D -- no --> F[yt-dlp: audio] --> U
+    B -- File --> H[FFmpeg: audio] --> U[Upload audio to Gemini]
+    U --> V[MCP: summarize_media<br/>Gemini listens to the audio]
+    V --> K
     J --> K[yt-dlp: related videos]
     K --> L[Roadmap saved to SQLite]
     L --> M{User action}
@@ -46,7 +59,9 @@ flowchart TD
     M -- Quiz me --> O[MCP: quiz_topic] --> L
     M -- Final Quiz --> P[MCP: quiz_overall] --> L
     M -- Mark done --> Q[MCP: update_done_topics] --> L
+    M -- Share --> SH[MCP: create_share_link] --> L
     M -- History --> R[MCP: list_history / get_history_item] --> L
+    M -- Save my work --> SG[MCP: upgrade_guest] --> L
     M -- Log out --> S[MCP: logout]
 ```
 
@@ -86,33 +101,33 @@ sequenceDiagram
     participant MCP as MCP Tools
     participant G as Gemini
 
-    User->>UI: Sign up / Log in
-    UI->>API: POST /api/auth/signup|login
-    API->>MCP: signup / login
+    User->>UI: Sign up / Log in / Skip for now
+    UI->>API: POST /api/auth/signup|login|guest
+    API->>MCP: signup / login / guest_login
     MCP-->>API: token
     API-->>UI: token (stored, sent as Bearer)
 
     User->>UI: Analyze video
-    UI->>API: POST /api/analyze (Bearer)
-    API->>G: transcribe YouTube URL or audio (or use captions)
-    G-->>API: transcript
-    API->>MCP: summarize_transcript
-    MCP->>G: generate roadmap
+    UI->>API: POST /api/analyze/stream (Bearer)
+    API-->>UI: progress event (SSE)
+    API->>MCP: summarize_media (or summarize_transcript for captions)
+    MCP->>G: watch video / listen to audio, write roadmap
     G-->>MCP: roadmap
     MCP-->>API: roadmap
-    API-->>UI: render + save to History
+    API-->>UI: progress events (SSE): related videos, saving
+    API-->>UI: result event (SSE), saved to History
 
     User->>UI: Explain / Quiz me / Final Quiz
-    UI->>API: POST /api/topic/... 
+    UI->>API: POST /api/topic/...
     API->>MCP: explain_topic / quiz_topic / quiz_overall
     MCP->>G: generate
     G-->>MCP: result
     MCP-->>API: result
     API-->>UI: show panel / quiz
 
-    User->>UI: Mark done / View History
-    UI->>API: PUT done-topics / GET history
-    API->>MCP: update_done_topics / list_history / get_history_item
+    User->>UI: Mark done / View History / Share
+    UI->>API: PUT done-topics / GET history / POST share
+    API->>MCP: update_done_topics / list_history / get_history_item / create_share_link
     MCP-->>API: data
     API-->>UI: update view
 
