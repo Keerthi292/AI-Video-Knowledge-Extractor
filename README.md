@@ -6,8 +6,7 @@ Turns a video (file or URL) into an interactive learning roadmap — intro, key 
 
 ```mermaid
 flowchart TD
-    A[Log in / Skip for now] --> B[Upload a file or paste a link]
-    B --> C{Input type?}
+    B[Upload a file or paste a link] --> C{Input type?}
     C -- YouTube link --> D[Gemini watches the video]
     C -- Other link --> E[Read captions or download audio]
     C -- File --> F[Extract audio with FFmpeg]
